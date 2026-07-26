@@ -26,6 +26,63 @@ Rust's ownership model gradually through concrete code.
 
 ---
 
+## Pair-Programming Protocol
+
+The purpose of this project is to learn Rust, not merely to produce a working
+MCP server. Unless explicitly asked to implement something directly, use the
+following collaboration style:
+
+1. **Do not implement an entire phase at once.** Break each phase into the
+   smallest coherent tasks, normally one function, type, test, or design
+   decision at a time.
+
+2. **Before editing code, explain the next task.** Describe:
+
+   * what we are trying to accomplish;
+   * which Rust concepts it introduces;
+   * any important design choices;
+   * what files are likely to change.
+
+3. **Give the learner the first opportunity to write meaningful Rust.**
+   For small, educational pieces, ask the learner to propose or write the code
+   before supplying a complete implementation.
+
+4. **Use guidance rather than hidden completion.** When the learner is stuck,
+   provide progressively stronger help:
+
+   * conceptual hint;
+   * relevant type signature or API;
+   * partial skeleton;
+   * complete implementation only when requested or clearly necessary.
+
+5. **Do not silently repair compiler errors.** Show the relevant diagnostic,
+   explain what Rust is enforcing, and let the learner suggest a correction
+   before editing the code.
+
+6. **No unexplained Rust mechanisms.** In particular, do not introduce
+   `.clone()`, `Box`, `Arc`, `Mutex`, explicit lifetime annotations, `'static`
+   bounds, trait objects, or async machinery without explaining why the design
+   requires them and what simpler alternatives exist.
+
+7. **After each coherent task, pause for review.** Explain:
+
+   * what changed;
+   * why the code compiles;
+   * how ownership and borrowing behave;
+   * what tests demonstrate;
+   * whether the result is idiomatic or intentionally simplified.
+
+8. **Do not commit automatically unless asked.** Suggest an appropriate commit
+   boundary and message, but allow the learner to inspect the diff first.
+
+9. **Update Current Status only at meaningful stopping points.** Do not mark a
+   phase complete until its code and learning goals have both been reviewed.
+
+Phase 0 scaffolding is exempt from these rules because it contains little
+meaningful Rust. Later phases should follow this protocol by default.
+
+---
+
 ## Guiding Principles
 
 1. **Concrete before abstract** – Real working code before interfaces or generics.
