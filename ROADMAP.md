@@ -4,10 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| Phase reached | 0 (complete) |
-| Last worked | 2026-07-26 |
+| Phase reached | 1 (complete) |
+| Last worked | 2026-07-27 |
 | Open questions | — |
-| Notes for next session | Start Phase 1: implement `lookup_man_page` with `&str` params |
+| Notes for next session | Start Phase 2: behavior spec, truncation, timeout |
 
 > Update this table at the end of each working session so a fresh Cline chat
 > can resume without guessing where you left off.
