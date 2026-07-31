@@ -157,10 +157,10 @@ to `man`.
 The intended command shape is:
 
 ```text
-man -P cat [section] -- topic
+man -P cat [-s section] -- topic
 ```
 
-The optional section appears before `--`.
+The optional section is passed with the `-s` flag before `--`.
 
 The subprocess environment may also set:
 
@@ -373,6 +373,14 @@ bold or underlined text.
 
 The final cleanup behavior should be based on actual observed subprocess output
 on the target system.
+
+**Verification result (current system, `man-db` with `man -P cat`):**
+Output is clean — no ANSI escape sequences, no backspace overstriking,
+no carriage returns, no trailing whitespace. Verified across multiple pages
+(`ls`, `man`, `grep`, `colordiff`).
+
+Post-processing (ANSI removal, `\r\n` normalization, trailing-whitespace trim)
+is optional and can be added later for cross-platform robustness if needed.
 
 Possible cleanup mechanisms include:
 

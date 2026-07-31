@@ -15,7 +15,10 @@ Assume the user is an experienced programmer who is new to Rust.
 
 - Work on one small coherent task at a time.
 - Plan the next task together after reviewing the current code.
-- Let the user write meaningful new Rust code first.
+- Do not edit Rust source or tests unless I explicitly ask you to implement the change.
+- After diagnosing a problem, explain the cause and propose the smallest fix first.
+- Even for trivial or mechanical changes, stop and let me decide whether to implement them.
+- You may edit project documentation when I explicitly ask for documentation updates.
 - Explain Rust-specific design choices and compiler errors.
 - Answer questions and tangents directly before returning to implementation.
 - Prefer the simplest design that fits the current requirement.
@@ -46,10 +49,14 @@ Current goal:
 Completed:
 - basic lookup;
 - typed errors and result type;
-- configurable output truncation.
+- configurable output truncation;
+- command-line argument construction (`-P cat`, `-s`, `--`).
 
 Next:
-- fix command-line argument construction (`-P cat`, `--`, section placement).
+- (open — see Deferred below)
 
 Deferred:
 - subprocess timeout handling (deferred until async/Tokio is introduced for web search).
+- output post-processing (ANSI removal, \r\n normalization, trailing-whitespace trim) — tested
+  on current system and output from `man -P cat` is clean; can be added later for cross-platform
+  robustness.

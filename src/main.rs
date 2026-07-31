@@ -19,7 +19,7 @@ impl Default for ManLookupConfig {
 #[derive(Clone, Debug)]
 struct ManPageResult {
     content: String,
-    truncated: bool
+    truncated: bool,
 }
 
 #[derive(Debug)]
@@ -32,42 +32,51 @@ enum ManError {
         exit_code: Option<i32>,
         stderr: String,
     },
-    Timeout
+    Timeout,
 }
 
-fn lookup_man_page(topic: &str, section: Option<&str>, config: ManLookupConfig) -> Result<ManPageResult, ManError> {
+fn lookup_man_page(
+    topic: &str,
+    section: Option<&str>,
+    config: ManLookupConfig,
+) -> Result<ManPageResult, ManError> {
     let mut cmd = Command::new("man");
+    cmd.arg("-P").arg("cat");
 
     if let Some(section) = section {
-        cmd.arg(section);
+        cmd.arg("-s").arg(section);
     }
+    cmd.arg("--");
     cmd.arg(topic);
 
-    let output = cmd.output().map_err(|e| ManError::SpawnError { message: e.to_string() })?;
+    let output = cmd.output().map_err(|e| ManError::SpawnError {
+        message: e.to_string(),
+    })?;
 
-    let stderr_str = String::from_utf8(output.stderr).expect("not valid utf8");
-    if stderr_str.contains("No manual entry") {
-        return Err(ManError::NotFound);
-    }
+    match output.status.code() {
+        Some(0) => {
+            let (content, truncated) = if output.stdout.len() > config.max_output_bytes {
+                let mut truncated_content = output.stdout[..config.max_output_bytes].to_vec();
+                truncated_content.extend_from_slice(b"[\n... truncated ...\n]");
+                (truncated_content, true)
+            } else {
+                (output.stdout, false)
+            };
 
-    if output.status.success() {
-        let (content, truncated) = if output.stdout.len() > config.max_output_bytes {
-            let mut truncated_content = output.stdout[..config.max_output_bytes].to_vec();
-            truncated_content.extend_from_slice(b"[\n... truncated ...\n]");
-            (truncated_content, true)
-        } else {
-            (output.stdout, false)
-        };
+            return Ok(ManPageResult {
+                content: String::from_utf8(content).expect("not valid utf8"),
+                truncated: truncated,
+            });
+        }
+        Some(16) => Err(ManError::NotFound),
+        other => {
+            let stderr_str = String::from_utf8(output.stderr).expect("not valid utf8");
 
-        Ok(ManPageResult {
-            content: String::from_utf8(content).expect("not valid utf8"),
-            truncated: truncated
-    })
-    } else {
-        Err(ManError::SubprocessError {
-            exit_code: output.status.code(),
-            stderr: stderr_str,
-        })
+            return Err(ManError::SubprocessError {
+                exit_code: other,
+                stderr: stderr_str,
+            });
+        }
     }
 }
 
@@ -79,17 +88,31 @@ fn main() {
 mod tests {
     use crate::ManLookupConfig;
 
-use super::lookup_man_page;
+    use super::lookup_man_page;
     use super::ManError;
 
     #[test]
     fn ls_is_ok() {
-        assert!(!lookup_man_page("ls", None, ManLookupConfig::default()).unwrap().content.is_empty());
+        assert!(!lookup_man_page("ls", None, ManLookupConfig::default())
+            .unwrap()
+            .content
+            .is_empty());
+    }
+
+    #[test]
+    fn ls_with_section() {
+        assert!(
+            !lookup_man_page("ls", Some("1"), ManLookupConfig::default())
+                .unwrap()
+                .content
+                .is_empty()
+        );
     }
 
     #[test]
     fn nonexistent_is_err() {
-        let err = lookup_man_page("nonexistent_topic_xyz", None, ManLookupConfig::default()).unwrap_err();
+        let err =
+            lookup_man_page("nonexistent_topic_xyz", None, ManLookupConfig::default()).unwrap_err();
 
         assert!(matches!(err, ManError::NotFound))
     }
