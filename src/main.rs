@@ -1,4 +1,26 @@
 use std::process::Command;
+use std::time::Duration;
+
+#[derive(Clone, Copy, Debug)]
+struct ManLookupConfig {
+    max_output_bytes: usize,
+    timeout: Duration,
+}
+
+impl Default for ManLookupConfig {
+    fn default() -> Self {
+        Self {
+            max_output_bytes: 8192,
+            timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ManPageResult {
+    content: String,
+    truncated: bool
+}
 
 #[derive(Debug)]
 enum ManError {
@@ -13,7 +35,7 @@ enum ManError {
     Timeout
 }
 
-fn lookup_man_page(topic: &str, section: Option<&str>) -> Result<String, ManError> {
+fn lookup_man_page(topic: &str, section: Option<&str>, config: ManLookupConfig) -> Result<ManPageResult, ManError> {
     let mut cmd = Command::new("man");
 
     if let Some(section) = section {
@@ -29,7 +51,18 @@ fn lookup_man_page(topic: &str, section: Option<&str>) -> Result<String, ManErro
     }
 
     if output.status.success() {
-        Ok(String::from_utf8(output.stdout).expect("not valid utf8"))
+        let (content, truncated) = if output.stdout.len() > config.max_output_bytes {
+            let mut truncated_content = output.stdout[..config.max_output_bytes].to_vec();
+            truncated_content.extend_from_slice(b"[\n... truncated ...\n]");
+            (truncated_content, true)
+        } else {
+            (output.stdout, false)
+        };
+
+        Ok(ManPageResult {
+            content: String::from_utf8(content).expect("not valid utf8"),
+            truncated: truncated
+    })
     } else {
         Err(ManError::SubprocessError {
             exit_code: output.status.code(),
@@ -44,17 +77,19 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::lookup_man_page;
+    use crate::ManLookupConfig;
+
+use super::lookup_man_page;
     use super::ManError;
 
     #[test]
     fn ls_is_ok() {
-        assert!(!lookup_man_page("ls", None).unwrap().is_empty());
+        assert!(!lookup_man_page("ls", None, ManLookupConfig::default()).unwrap().content.is_empty());
     }
 
     #[test]
     fn nonexistent_is_err() {
-        let err = lookup_man_page("nonexistent_topic_xyz", None).unwrap_err();
+        let err = lookup_man_page("nonexistent_topic_xyz", None, ManLookupConfig::default()).unwrap_err();
 
         assert!(matches!(err, ManError::NotFound))
     }
