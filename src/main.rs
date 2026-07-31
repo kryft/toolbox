@@ -1,3 +1,4 @@
+use std::fmt;
 use std::process::Command;
 use std::time::Duration;
 
@@ -35,10 +36,26 @@ enum ManError {
     Timeout,
 }
 
+impl fmt::Display for ManError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ManError::NotFound => write!(f, "page not found"),
+            ManError::SpawnError { message } => write!(f, "failed to spawn man: {}", message),
+            ManError::SubprocessError { exit_code, stderr } => {
+                match exit_code {
+                    Some(code) => write!(f, "subprocess failed (exit {}): {}", code, stderr),
+                    None => write!(f, "subprocess failed: {}", stderr),
+                }
+            }
+            ManError::Timeout => write!(f, "subprocess timed out")
+        }
+    }
+}
+
 fn lookup_man_page(
     topic: &str,
     section: Option<&str>,
-    config: ManLookupConfig,
+    config: &ManLookupConfig,
 ) -> Result<ManPageResult, ManError> {
     let mut cmd = Command::new("man");
     cmd.arg("-P").arg("cat");
@@ -93,7 +110,7 @@ mod tests {
 
     #[test]
     fn ls_is_ok() {
-        assert!(!lookup_man_page("ls", None, ManLookupConfig::default())
+        assert!(!lookup_man_page("ls", None, &ManLookupConfig::default())
             .unwrap()
             .content
             .is_empty());
@@ -102,7 +119,7 @@ mod tests {
     #[test]
     fn ls_with_section() {
         assert!(
-            !lookup_man_page("ls", Some("1"), ManLookupConfig::default())
+            !lookup_man_page("ls", Some("1"), &ManLookupConfig::default())
                 .unwrap()
                 .content
                 .is_empty()
@@ -112,8 +129,15 @@ mod tests {
     #[test]
     fn nonexistent_is_err() {
         let err =
-            lookup_man_page("nonexistent_topic_xyz", None, ManLookupConfig::default()).unwrap_err();
+            lookup_man_page("nonexistent_topic_xyz", None, &ManLookupConfig::default()).unwrap_err();
 
         assert!(matches!(err, ManError::NotFound))
+    }
+
+    #[test]
+    fn test_man_error_display() {
+        assert_eq!(ManError::NotFound.to_string(), "page not found");
+        assert_eq!(ManError::SubprocessError { exit_code: Some(1), stderr: String::from("error message")}.to_string(), "subprocess failed (exit 1): error message");
+        assert_eq!(ManError::SubprocessError { exit_code: None, stderr: String::from("error message")}.to_string(), "subprocess failed: error message");
     }
 }
