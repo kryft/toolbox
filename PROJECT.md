@@ -44,16 +44,22 @@ and discuss proposed changes with the user before implementing them.
 ## Current Work
 
 Current goal:
-- reproduce the existing TypeScript man-page behavior in Rust.
+- build a minimal stdio MCP server exposing the man-page tool.
 
-Completed:
+Completed (man-page tool):
 - basic lookup;
 - typed errors and result type;
 - configurable output truncation;
-- command-line argument construction (`-P cat`, `-s`, `--`).
+- command-line argument construction (`-P cat`, `-s`, `--`);
+- input validation (topic and section);
+- `Display` impl for `ManError`;
+- split into `man_page` module.
 
 Next:
-- (open — see Deferred below)
+- add `serde`/`serde_json` dependencies;
+- define JSON-RPC request/response types;
+- implement the stdio dispatch loop;
+- handle `initialize`, `tools/list`, `tools/call`.
 
 Deferred:
 - subprocess timeout handling (deferred until async/Tokio is introduced for web search).
