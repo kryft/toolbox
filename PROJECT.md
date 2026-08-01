@@ -41,6 +41,19 @@ Assume the user is an experienced programmer who is new to Rust.
 Treat it as revisable rather than immutable: verify questionable assumptions,
 and discuss proposed changes with the user before implementing them.
 
+## MCP protocol target
+
+This project initially targets MCP protocol version `2025-11-25`.
+
+Before implementing or changing MCP wire behavior, consult:
+
+- `docs/mcp/2025-11-25/SUMMARY.md` for a project-focused overview
+- the relevant vendored specification page in `docs/mcp/2025-11-25/`
+- `docs/mcp/2025-11-25/schema.ts` when exact field shapes are unclear
+
+`SUMMARY.md` is generated guidance and may be incomplete or mistaken. The
+vendored specification and schema are authoritative.
+
 ## Current Work
 
 Current goal:
