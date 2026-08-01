@@ -54,6 +54,43 @@ Before implementing or changing MCP wire behavior, consult:
 `SUMMARY.md` is generated guidance and may be incomplete or mistaken. The
 vendored specification and schema are authoritative.
 
+## Local Rust references
+
+The container includes the `rust-docs` and `rust-src` rustup components.
+
+When exact Rust API behavior or signatures matter, prefer checking the local
+official documentation rather than relying on model memory:
+
+- Documentation root: `rustup doc --path`
+- Toolchain root: `rustc --print sysroot`
+- Standard-library source:
+  `$(rustc --print sysroot)/lib/rustlib/src/rust/library`
+
+Search or render only the relevant files; do not load the full documentation
+into context unnecessarily.
+
+You can locate a specific standard library item with something like:
+
+```bash
+docs_root="$(dirname "$(rustup doc --path)")"
+find "$docs_root/std" -iname '*child*'
+rg -n 'try_wait|wait_with_output' "$docs_root/std"
+```
+
+You can inspect source with e.g.
+
+```bash
+rg -n 'pub fn try_wait' \
+  "$(rustc --print sysroot)/lib/rustlib/src/rust/library"
+```
+
+You can turn a specific HTML page into readeble text with
+
+```bash
+w3m -dump \
+  "$(dirname "$(rustup doc --path)")/std/process/struct.Child.html"
+```
+
 ## Current Work
 
 Current goal:
