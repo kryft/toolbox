@@ -49,6 +49,26 @@ pub const METHOD_NOT_FOUND: i32 = -32601;
 pub const INVALID_PARAMS: i32 = -32602;
 pub const INTERNAL_ERROR: i32 = -32603;
 
+#[derive(Serialize)]
+pub struct ServerCapabilities {
+    // todo
+    pub tools: Value,
+}
+
+#[derive(Serialize)]
+pub struct Implementation {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResult {
+    pub protocol_version: String,
+    pub capabilities: ServerCapabilities,
+    pub server_info: Implementation,
+}
+
 pub fn parse_message(message: &str) -> Result<JsonRpcMessage, JsonRpcError> {
     let value: Value = match serde_json::from_str(message) {
         Ok(v) => v,
