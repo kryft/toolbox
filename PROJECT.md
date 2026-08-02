@@ -15,6 +15,7 @@ Assume the user is an experienced programmer who is new to Rust.
 
 - Work on one small coherent task at a time.
 - Plan the next task together after reviewing the current code.
+- You should let me do the task unless I tell you to do it.
 - Do not edit Rust source or tests unless I explicitly ask you to implement the change.
 - After diagnosing a problem, explain the cause and propose the smallest fix first.
 - Even for trivial or mechanical changes, stop and let me decide whether to implement them.
