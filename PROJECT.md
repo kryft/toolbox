@@ -95,7 +95,7 @@ w3m -dump \
 ## Current Work
 
 Current goal:
-- add tests and refactor as needed before moving to async.
+- tests and refactor complete; next phase is async / web search.
 
 Completed (man-page tool):
 - basic lookup;
@@ -124,8 +124,14 @@ Completed (refactor):
 - `server.rs` — request routing (`initialize`, `tools/list`, `tools/call` dispatch);
 - `main.rs` — stdio loop + `write_response` helper only.
 
+Completed (tests):
+- unit tests for `parse_message` (valid requests, notifications, invalid JSON, missing fields, edge cases);
+- unit tests for `handle_request` (initialize, tools/list, tools/call, unknown method);
+- unit tests for man_page (validation, lookup, error display);
+- integration tests (`tests/integration.rs`) — spawn binary, pipe JSON-RPC messages.
+
 Next:
-- unit tests for `parse_message`;
+- (tests and refactor complete; ready for async / web search)
 
 Deferred:
 - subprocess timeout handling (deferred until async/Tokio is introduced for web search).
