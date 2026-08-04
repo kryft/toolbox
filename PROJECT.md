@@ -95,7 +95,7 @@ w3m -dump \
 ## Current Work
 
 Current goal:
-- build a minimal stdio MCP server exposing the man-page tool.
+- add tests and refactor as needed before moving to async.
 
 Completed (man-page tool):
 - basic lookup;
@@ -106,11 +106,21 @@ Completed (man-page tool):
 - `Display` impl for `ManError`;
 - split into `man_page` module.
 
+Completed (MCP server):
+- `serde`/`serde_json` dependencies;
+- JSON-RPC request/response/error types in `mcp` module;
+- message parsing (`parse_message`) with request/notification dispatch;
+- stdio dispatch loop (read lines, parse, handle, write responses);
+- `initialize` handler (protocol version, capabilities, server info);
+- `tools/list` handler (man_page tool definition);
+- `tools/call` handler (argument extraction, man page lookup, error mapping);
+- full lifecycle tested end-to-end (initialize → initialized → tools/list → tools/call);
+- integration tests (`tests/integration.rs`) — spawn binary, pipe JSON-RPC messages.
+
 Next:
-- add `serde`/`serde_json` dependencies;
-- define JSON-RPC request/response types;
-- implement the stdio dispatch loop;
-- handle `initialize`, `tools/list`, `tools/call`.
+- refactor to module structure: `mcp.rs` (protocol types), `man_page.rs` (tool + MCP adapter), `server.rs` (request routing), `main.rs` (stdio loop only);
+- unit tests for `parse_message`;
+- include `truncated` flag in tool call response.
 
 Deferred:
 - subprocess timeout handling (deferred until async/Tokio is introduced for web search).
