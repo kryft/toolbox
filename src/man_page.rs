@@ -2,6 +2,10 @@ use std::fmt;
 use std::process::Command;
 use std::time::Duration;
 
+use serde_json::Value;
+
+use crate::mcp;
+
 #[derive(Clone, Copy, Debug)]
 pub struct ManLookupConfig {
     pub max_output_bytes: usize,
@@ -141,6 +145,49 @@ pub fn lookup_man_page(
                 stderr: stderr_str,
             });
         }
+    }
+}
+
+// --- MCP adapter ---
+
+pub fn tool_definition() -> Value {
+    serde_json::json!({
+        "name": "man_page",
+        "description": "Look up a man page",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": { "type": "string", "description": "topic (e.g. 'ls')"},
+                "section": { "type": "string", "description": "section (1-8, n, l or p)"}
+            },
+            "required": ["topic"]
+        }
+    })
+}
+
+pub fn handle_call(
+    args: Value,
+) -> Result<Value, mcp::JsonRpcErrorResponse> {
+    let topic = args["topic"].as_str().unwrap_or("");
+    let section = args["section"].as_str();
+
+    let man_page_res =
+        lookup_man_page(topic, section, &ManLookupConfig::default());
+
+    match man_page_res {
+        Ok(res) => Ok(serde_json::json!({
+            "content": [
+                { "type": "text", "text": res.content },
+            ],
+            "isError": false,
+            "truncated": res.truncated,
+        })),
+        Err(err) => Ok(serde_json::json!({
+            "content": [
+                { "type": "text", "text": err.to_string() },
+            ],
+            "isError": true,
+        })),
     }
 }
 

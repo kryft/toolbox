@@ -114,13 +114,18 @@ Completed (MCP server):
 - `initialize` handler (protocol version, capabilities, server info);
 - `tools/list` handler (man_page tool definition);
 - `tools/call` handler (argument extraction, man page lookup, error mapping);
+- `truncated` flag included in tool call response;
 - full lifecycle tested end-to-end (initialize → initialized → tools/list → tools/call);
 - integration tests (`tests/integration.rs`) — spawn binary, pipe JSON-RPC messages.
 
+Completed (refactor):
+- `mcp.rs` — protocol types and `parse_message` only;
+- `man_page.rs` — lookup logic + MCP adapter (`tool_definition`, `handle_call`);
+- `server.rs` — request routing (`initialize`, `tools/list`, `tools/call` dispatch);
+- `main.rs` — stdio loop + `write_response` helper only.
+
 Next:
-- refactor to module structure: `mcp.rs` (protocol types), `man_page.rs` (tool + MCP adapter), `server.rs` (request routing), `main.rs` (stdio loop only);
 - unit tests for `parse_message`;
-- include `truncated` flag in tool call response.
 
 Deferred:
 - subprocess timeout handling (deferred until async/Tokio is introduced for web search).
