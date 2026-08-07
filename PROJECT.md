@@ -16,6 +16,7 @@ Assume the user is an experienced programmer who is new to Rust.
 - Work on one small coherent task at a time.
 - Plan the next task together after reviewing the current code.
 - You should let me do the task unless I tell you to do it.
+- Don't give me the whole source code for a task unless I asked for it or it's very short.
 - Do not edit Rust source or tests unless I explicitly ask you to implement the change.
 - After diagnosing a problem, explain the cause and propose the smallest fix first.
 - Even for trivial or mechanical changes, stop and let me decide whether to implement them.
@@ -26,7 +27,6 @@ Assume the user is an experienced programmer who is new to Rust.
 - Do not introduce advanced mechanisms such as explicit lifetimes, trait
   objects, async, `Arc`, `Mutex`, or complex generics unless the current
   problem genuinely benefits from them; explain the need first.
-- Do not complete an entire feature unless explicitly asked.
 - Use the existing source code as evidence of Rust concepts already encountered.
 
 ## Roadmap
@@ -66,6 +66,8 @@ official documentation rather than relying on model memory:
 - Toolchain root: `rustc --print sysroot`
 - Standard-library source:
   `$(rustc --print sysroot)/lib/rustlib/src/rust/library`
+
+For Rust crate API questions, prefer local documentation when available. Run cargo doc and inspect target/doc/ for the versions actually used by the project. Use rustup doc for standard-library/toolchain documentation.
 
 Search or render only the relevant files; do not load the full documentation
 into context unnecessarily.
@@ -130,11 +132,20 @@ Completed (tests):
 - unit tests for man_page (validation, lookup, error display);
 - integration tests (`tests/integration.rs`) — spawn binary, pipe JSON-RPC messages.
 
+Completed (async):
+- `main()` converted to async with `#[tokio::main]`;
+- stdio reading via `tokio::io::BufReader` + `AsyncBufReadExt::lines()`;
+- all tests still pass.
+
 Next:
-- (tests and refactor complete; ready for async / web search)
+- Make `server::handle_request` async;
+- Add a `fetch_url` tool (async HTTP GET, return page text);
+- Wire `fetch_url` into the MCP server (tools/list + tools/call);
+- Later: add `search_web` tool (SearXNG-based search).
 
 Deferred:
-- subprocess timeout handling (deferred until async/Tokio is introduced for web search).
+- `search_web` tool (SearXNG integration) — after `fetch_url` is working.
+- subprocess timeout handling.
 - output post-processing (ANSI removal, \r\n normalization, trailing-whitespace trim) — tested
   on current system and output from `man -P cat` is clean; can be added later for cross-platform
   robustness.
