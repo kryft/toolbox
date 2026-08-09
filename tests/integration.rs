@@ -82,8 +82,9 @@ fn tools_list() {
     assert_eq!(resp["id"], 2);
     let tools = &resp["result"]["tools"];
     assert!(tools.is_array());
-    assert_eq!(tools.as_array().unwrap().len(), 1);
+    assert_eq!(tools.as_array().unwrap().len(), 2);
     assert_eq!(tools[0]["name"], "man_page");
+    assert_eq!(tools[1]["name"], "fetch_url");
 }
 
 #[test]
@@ -191,4 +192,22 @@ fn full_lifecycle() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn tools_call_fetch_url_success() {
+    let mut h = Harness::new();
+
+    h.send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+    h.send_no_response(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+
+    let resp = h.send(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_url","arguments":{"url":"http://example.com"}}}"#,
+    );
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 2);
+    assert_eq!(resp["result"]["isError"], false);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Example Domain"));
 }

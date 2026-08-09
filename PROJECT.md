@@ -97,7 +97,7 @@ w3m -dump \
 ## Current Work
 
 Current goal:
-- tests and refactor complete; next phase is async / web search.
+- fetch_url complete; next phase is `search_web` (SearXNG integration).
 
 Completed (man-page tool):
 - basic lookup;
@@ -135,16 +135,23 @@ Completed (tests):
 Completed (async):
 - `main()` converted to async with `#[tokio::main]`;
 - stdio reading via `tokio::io::BufReader` + `AsyncBufReadExt::lines()`;
-- all tests still pass.
+- `server::handle_request` converted to `async fn`;
+- all tests converted to `#[tokio::test]`;
+- `CallToolParams.arguments` refactored to generic `Value` (each tool owns its
+  own argument parsing);
+- `invalid_params` moved to `mcp.rs` as shared utility.
+
+Completed (fetch_url):
+- `fetch_url` module with `tool_definition()` and async `handle_call()`;
+- `reqwest` for async HTTP GET;
+- wired into MCP server (`tools/list` + `tools/call` dispatch);
+- unit test with local `tokio::net::TcpListener`;
+- integration test against `http://example.com`.
 
 Next:
-- Make `server::handle_request` async;
-- Add a `fetch_url` tool (async HTTP GET, return page text);
-- Wire `fetch_url` into the MCP server (tools/list + tools/call);
-- Later: add `search_web` tool (SearXNG-based search).
+- Add `search_web` tool (SearXNG-based search).
 
 Deferred:
-- `search_web` tool (SearXNG integration) — after `fetch_url` is working.
 - subprocess timeout handling.
 - output post-processing (ANSI removal, \r\n normalization, trailing-whitespace trim) — tested
   on current system and output from `man -P cat` is clean; can be added later for cross-platform

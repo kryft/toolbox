@@ -1,33 +1,16 @@
 use serde_json::Value;
 
+use crate::fetch_url;
 use crate::man_page;
 use crate::mcp;
 
 #[derive(serde::Deserialize)]
-struct ManPageArgs {
-    topic: String,
-    section: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
 struct CallToolParams {
     name: String,
-    arguments: ManPageArgs,
+    arguments: Value,
 }
 
-fn invalid_params(msg: &str) -> mcp::JsonRpcErrorResponse {
-    mcp::JsonRpcErrorResponse {
-        id: None,
-        jsonrpc: "2.0".into(),
-        error: mcp::JsonRpcError {
-            code: mcp::INVALID_PARAMS,
-            data: None,
-            message: msg.into(),
-        },
-    }
-}
-
-pub fn handle_request(
+pub async fn handle_request(
     req: mcp::JsonRpcRequest,
 ) -> Result<mcp::JsonRpcResponse, mcp::JsonRpcErrorResponse> {
     match req.method.as_str() {
@@ -44,23 +27,18 @@ pub fn handle_request(
             id: req.id,
             jsonrpc: "2.0".into(),
             result: serde_json::json!({
-                "tools": [man_page::tool_definition()]
+                "tools": [man_page::tool_definition(), fetch_url::tool_definition()]
             }),
         }),
         "tools/call" => {
-            let params: CallToolParams =
-                serde_json::from_value(req.params.unwrap_or(Value::Null))
-                    .map_err(|_| invalid_params("bad params"))?;
+            let params: CallToolParams = serde_json::from_value(req.params.unwrap_or(Value::Null))
+                .map_err(|_| mcp::invalid_params("bad params"))?;
 
-            if params.name.as_str() != "man_page" {
-                return Err(invalid_params("unknown tool"));
-            }
-
-            let args = serde_json::json!({
-                "topic": params.arguments.topic,
-                "section": params.arguments.section,
-            });
-            let result = man_page::handle_call(args)?;
+            let result = match params.name.as_str() {
+                "man_page" => man_page::handle_call(params.arguments),
+                "fetch_url" => fetch_url::handle_call(params.arguments).await,
+                _other => Err(mcp::invalid_params("unknown tool")),
+            }?;
 
             Ok(mcp::JsonRpcResponse {
                 id: req.id,
@@ -93,10 +71,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn initialize_returns_server_info() {
+    #[tokio::test]
+    async fn initialize_returns_server_info() {
         let req = make_request(Value::from(1), "initialize", None);
-        let resp = handle_request(req).unwrap();
+        let resp = handle_request(req).await.unwrap();
 
         assert_eq!(resp.id, 1);
         assert_eq!(resp.result["protocolVersion"], "2025-11-25");
@@ -105,20 +83,21 @@ mod tests {
         assert!(resp.result["capabilities"]["tools"].is_object());
     }
 
-    #[test]
-    fn tools_list_returns_man_page() {
+    #[tokio::test]
+    async fn tools_list_returns_tools() {
         let req = make_request(Value::from(2), "tools/list", None);
-        let resp = handle_request(req).unwrap();
+        let resp = handle_request(req).await.unwrap();
 
         assert_eq!(resp.id, 2);
         let tools = &resp.result["tools"];
         assert!(tools.is_array());
-        assert_eq!(tools.as_array().unwrap().len(), 1);
+        assert_eq!(tools.as_array().unwrap().len(), 2);
         assert_eq!(tools[0]["name"], "man_page");
+        assert_eq!(tools[1]["name"], "fetch_url");
     }
 
-    #[test]
-    fn tools_call_unknown_tool() {
+    #[tokio::test]
+    async fn tools_call_unknown_tool() {
         let req = make_request(
             Value::from(3),
             "tools/call",
@@ -127,22 +106,22 @@ mod tests {
                 "arguments": { "topic": "ls" }
             })),
         );
-        let err = handle_request(req).unwrap_err();
+        let err = handle_request(req).await.unwrap_err();
 
         assert!(err.id.is_none());
         assert_eq!(err.error.code, mcp::INVALID_PARAMS);
     }
 
-    #[test]
-    fn tools_call_missing_params() {
+    #[tokio::test]
+    async fn tools_call_missing_params() {
         let req = make_request(Value::from(4), "tools/call", None);
-        let err = handle_request(req).unwrap_err();
+        let err = handle_request(req).await.unwrap_err();
 
         assert_eq!(err.error.code, mcp::INVALID_PARAMS);
     }
 
-    #[test]
-    fn tools_call_man_page_success() {
+    #[tokio::test]
+    async fn tools_call_man_page_success() {
         let req = make_request(
             Value::from(5),
             "tools/call",
@@ -151,17 +130,22 @@ mod tests {
                 "arguments": { "topic": "ls" }
             })),
         );
-        let resp = handle_request(req).unwrap();
+        let resp = handle_request(req).await.unwrap();
 
         assert_eq!(resp.id, 5);
         assert_eq!(resp.result["isError"], false);
-        assert!(!resp.result["content"][0]["text"].as_str().unwrap().is_empty());
+        assert!(
+            !resp.result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
     }
 
-    #[test]
-    fn unknown_method() {
+    #[tokio::test]
+    async fn unknown_method() {
         let req = make_request(Value::from(6), "foo/bar", None);
-        let err = handle_request(req).unwrap_err();
+        let err = handle_request(req).await.unwrap_err();
 
         assert_eq!(err.id, Some(Value::from(6)));
         assert_eq!(err.error.code, mcp::METHOD_NOT_FOUND);

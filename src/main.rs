@@ -1,3 +1,4 @@
+mod fetch_url;
 mod man_page;
 mod mcp;
 mod server;
@@ -38,7 +39,7 @@ async fn main() {
                     eprintln!("Got a notification");
                     continue;
                 }
-                mcp::JsonRpcMessage::Request(req) => server::handle_request(req),
+                mcp::JsonRpcMessage::Request(req) => server::handle_request(req).await,
             },
             Err(err) => Err(mcp::JsonRpcErrorResponse {
                 jsonrpc: "2.0".into(),

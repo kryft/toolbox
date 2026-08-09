@@ -49,6 +49,18 @@ pub const METHOD_NOT_FOUND: i32 = -32601;
 pub const INVALID_PARAMS: i32 = -32602;
 pub const INTERNAL_ERROR: i32 = -32603;
 
+pub fn invalid_params(msg: &str) -> JsonRpcErrorResponse {
+    JsonRpcErrorResponse {
+        id: None,
+        jsonrpc: "2.0".into(),
+        error: JsonRpcError {
+            code: INVALID_PARAMS,
+            data: None,
+            message: msg.into(),
+        },
+    }
+}
+
 pub fn parse_message(message: &str) -> Result<JsonRpcMessage, JsonRpcError> {
     let value: Value = match serde_json::from_str(message) {
         Ok(v) => v,

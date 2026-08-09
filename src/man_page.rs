@@ -43,6 +43,12 @@ pub enum ManError {
     Timeout,
 }
 
+#[derive(serde::Deserialize)]
+struct ManPageArgs {
+    topic: String,
+    section: Option<String>,
+}
+
 impl fmt::Display for ManError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -165,14 +171,14 @@ pub fn tool_definition() -> Value {
     })
 }
 
-pub fn handle_call(
-    args: Value,
-) -> Result<Value, mcp::JsonRpcErrorResponse> {
-    let topic = args["topic"].as_str().unwrap_or("");
-    let section = args["section"].as_str();
+pub fn handle_call(args: Value) -> Result<Value, mcp::JsonRpcErrorResponse> {
+    let parsed_args: ManPageArgs =
+        serde_json::from_value(args).map_err(|_| mcp::invalid_params("bad params"))?;
 
-    let man_page_res =
-        lookup_man_page(topic, section, &ManLookupConfig::default());
+    let topic = parsed_args.topic.as_str();
+    let section = parsed_args.section.as_deref();
+
+    let man_page_res = lookup_man_page(topic, section, &ManLookupConfig::default());
 
     match man_page_res {
         Ok(res) => Ok(serde_json::json!({
