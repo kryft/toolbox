@@ -31,12 +31,13 @@ Assume the user is an experienced programmer who is new to Rust.
 
 ## Roadmap
 
-1. Complete the synchronous man-page tool.
-2. Expose it through a minimal MCP server.
-3. Introduce async when HTTP work makes it useful.
-4. Add web search and webpage fetching.
-5. Add concurrency and resource control as needed.
-6. Plan the Rust agent separately.
+1. ~~Complete synchronous man-page tool.~~
+2. ~~Expose through minimal MCP server.~~
+3. ~~Introduce async and webpage fetching.~~
+4. Add SearXNG web search.
+5. Add large-document fetching/storage and summarization as useful.
+6. Add concurrency/resource control as needed.
+7. Plan the Rust agent separately.
 
 `BEHAVIOR.md` records the current intended behavior of the man-page tool.
 Treat it as revisable rather than immutable: verify questionable assumptions,
@@ -94,65 +95,28 @@ w3m -dump \
   "$(dirname "$(rustup doc --path)")/std/process/struct.Child.html"
 ```
 
-## Current Work
+## Current State
+
+Architecture:
+
+- `main.rs` — async stdio loop
+- `server.rs` — MCP request routing
+- `mcp.rs` — JSON-RPC/MCP protocol types and shared helpers
+- `man_page.rs` — man-page tool
+- `fetch_url.rs` — async HTTP fetching with reqwest
+
+Implemented:
+
+- MCP lifecycle and tool dispatch
+- `man_page`
+- `fetch_url`
+- async Tokio runtime
+- unit and end-to-end integration tests
 
 Current goal:
-- fetch_url complete; next phase is `search_web` (SearXNG integration).
 
-Completed (man-page tool):
-- basic lookup;
-- typed errors and result type;
-- configurable output truncation;
-- command-line argument construction (`-P cat`, `-s`, `--`);
-- input validation (topic and section);
-- `Display` impl for `ManError`;
-- split into `man_page` module.
-
-Completed (MCP server):
-- `serde`/`serde_json` dependencies;
-- JSON-RPC request/response/error types in `mcp` module;
-- message parsing (`parse_message`) with request/notification dispatch;
-- stdio dispatch loop (read lines, parse, handle, write responses);
-- `initialize` handler (protocol version, capabilities, server info);
-- `tools/list` handler (man_page tool definition);
-- `tools/call` handler (argument extraction, man page lookup, error mapping);
-- `truncated` flag included in tool call response;
-- full lifecycle tested end-to-end (initialize → initialized → tools/list → tools/call);
-- integration tests (`tests/integration.rs`) — spawn binary, pipe JSON-RPC messages.
-
-Completed (refactor):
-- `mcp.rs` — protocol types and `parse_message` only;
-- `man_page.rs` — lookup logic + MCP adapter (`tool_definition`, `handle_call`);
-- `server.rs` — request routing (`initialize`, `tools/list`, `tools/call` dispatch);
-- `main.rs` — stdio loop + `write_response` helper only.
-
-Completed (tests):
-- unit tests for `parse_message` (valid requests, notifications, invalid JSON, missing fields, edge cases);
-- unit tests for `handle_request` (initialize, tools/list, tools/call, unknown method);
-- unit tests for man_page (validation, lookup, error display);
-- integration tests (`tests/integration.rs`) — spawn binary, pipe JSON-RPC messages.
-
-Completed (async):
-- `main()` converted to async with `#[tokio::main]`;
-- stdio reading via `tokio::io::BufReader` + `AsyncBufReadExt::lines()`;
-- `server::handle_request` converted to `async fn`;
-- all tests converted to `#[tokio::test]`;
-- `CallToolParams.arguments` refactored to generic `Value` (each tool owns its
-  own argument parsing);
-- `invalid_params` moved to `mcp.rs` as shared utility.
-
-Completed (fetch_url):
-- `fetch_url` module with `tool_definition()` and async `handle_call()`;
-- `reqwest` for async HTTP GET;
-- wired into MCP server (`tools/list` + `tools/call` dispatch);
-- unit test with local `tokio::net::TcpListener`;
-- integration test against `http://example.com`.
-
-Next:
-- Add `search_web` tool (SearXNG-based search).
+- Add `search_web` using the local SearXNG instance.
 
 Deferred:
-- subprocess timeout handling.
-- output post-processing (ANSI removal, \r\n normalization, trailing-whitespace trim) — tested
-  on current system and output from `man -P cat` is clean; can be added later for cross-platform
-  robustness.
+
+- subprocess timeout handling
