@@ -1,6 +1,7 @@
 mod fetch_url;
 mod man_page;
 mod mcp;
+mod search_web;
 mod server;
 
 use std::io::{self, Write};

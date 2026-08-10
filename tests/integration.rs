@@ -82,9 +82,10 @@ fn tools_list() {
     assert_eq!(resp["id"], 2);
     let tools = &resp["result"]["tools"];
     assert!(tools.is_array());
-    assert_eq!(tools.as_array().unwrap().len(), 2);
+    assert_eq!(tools.as_array().unwrap().len(), 3);
     assert_eq!(tools[0]["name"], "man_page");
     assert_eq!(tools[1]["name"], "fetch_url");
+    assert_eq!(tools[2]["name"], "search_web");
 }
 
 #[test]

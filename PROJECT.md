@@ -34,7 +34,7 @@ Assume the user is an experienced programmer who is new to Rust.
 1. ~~Complete synchronous man-page tool.~~
 2. ~~Expose through minimal MCP server.~~
 3. ~~Introduce async and webpage fetching.~~
-4. Add SearXNG web search.
+4. ~~Add SearXNG web search.~~
 5. Add large-document fetching/storage and summarization as useful.
 6. Add concurrency/resource control as needed.
 7. Plan the Rust agent separately.
