@@ -1,8 +1,9 @@
 use std::fmt;
-use std::process::Command;
+use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::Value;
+use tokio::io::AsyncReadExt;
 
 use crate::mcp;
 
@@ -106,14 +107,14 @@ fn validate_section(section: &str) -> Result<(), ManError> {
     Ok(())
 }
 
-pub fn lookup_man_page(
+pub async fn lookup_man_page(
     topic: &str,
     section: Option<&str>,
     config: &ManLookupConfig,
 ) -> Result<ManPageResult, ManError> {
     validate_topic(topic)?;
 
-    let mut cmd = Command::new("man");
+    let mut cmd = tokio::process::Command::new("man");
     cmd.arg("-P").arg("cat");
 
     if let Some(section) = section {
@@ -122,19 +123,48 @@ pub fn lookup_man_page(
     }
     cmd.arg("--");
     cmd.arg(topic);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
 
-    let output = cmd.output().map_err(|e| ManError::SpawnError {
+    let mut child = cmd.spawn().map_err(|e| ManError::SpawnError {
         message: e.to_string(),
     })?;
+    let mut out_pipe = child.stdout.take().unwrap();
+    let mut err_pipe = child.stderr.take().unwrap();
 
-    match output.status.code() {
+    let (status, std_out, stderr) = match tokio::time::timeout(config.timeout, async {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let (status, _, _) = tokio::try_join!(
+            child.wait(),
+            out_pipe.read_to_end(&mut stdout),
+            err_pipe.read_to_end(&mut stderr),
+        )?;
+        Ok::<_, std::io::Error>((status, stdout, stderr))
+    })
+    .await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            return Err(ManError::SpawnError {
+                message: e.to_string(),
+            });
+        }
+        Err(_elapsed) => {
+            let _ = child.kill().await;
+            return Err(ManError::Timeout);
+        }
+    };
+
+    match status.code() {
         Some(0) => {
-            let (content, truncated) = if output.stdout.len() > config.max_output_bytes {
-                let mut truncated_content = output.stdout[..config.max_output_bytes].to_vec();
+            let (content, truncated) = if std_out.len() > config.max_output_bytes {
+                let mut truncated_content = std_out[..config.max_output_bytes].to_vec();
                 truncated_content.extend_from_slice(b"[\n... truncated ...\n]");
                 (truncated_content, true)
             } else {
-                (output.stdout, false)
+                (std_out, false)
             };
 
             return Ok(ManPageResult {
@@ -142,9 +172,10 @@ pub fn lookup_man_page(
                 truncated,
             });
         }
+
         Some(16) => Err(ManError::NotFound),
         other => {
-            let stderr_str = String::from_utf8(output.stderr).expect("not valid utf8");
+            let stderr_str = String::from_utf8(stderr).expect("not valid utf8");
 
             return Err(ManError::SubprocessError {
                 exit_code: other,
@@ -171,14 +202,14 @@ pub fn tool_definition() -> Value {
     })
 }
 
-pub fn handle_call(args: Value) -> Result<Value, mcp::JsonRpcErrorResponse> {
+pub async fn handle_call(args: Value) -> Result<Value, mcp::JsonRpcErrorResponse> {
     let parsed_args: ManPageArgs =
         serde_json::from_value(args).map_err(|_| mcp::invalid_params("bad params"))?;
 
     let topic = parsed_args.topic.as_str();
     let section = parsed_args.section.as_deref();
 
-    let man_page_res = lookup_man_page(topic, section, &ManLookupConfig::default());
+    let man_page_res = lookup_man_page(topic, section, &ManLookupConfig::default()).await;
 
     match man_page_res {
         Ok(res) => Ok(serde_json::json!({
@@ -201,32 +232,59 @@ pub fn handle_call(args: Value) -> Result<Value, mcp::JsonRpcErrorResponse> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn ls_is_ok() {
+    #[tokio::test]
+    async fn ls_is_ok() {
         assert!(
             !lookup_man_page("ls", None, &ManLookupConfig::default())
+                .await
                 .unwrap()
                 .content
                 .is_empty()
         );
     }
 
-    #[test]
-    fn ls_with_section() {
+    #[tokio::test]
+    async fn ls_with_section() {
         assert!(
             !lookup_man_page("ls", Some("1"), &ManLookupConfig::default())
+                .await
                 .unwrap()
                 .content
                 .is_empty()
         );
     }
 
-    #[test]
-    fn nonexistent_is_err() {
+    #[tokio::test]
+    async fn nonexistent_is_err() {
         let err = lookup_man_page("nonexistent_topic_xyz", None, &ManLookupConfig::default())
+            .await
             .unwrap_err();
 
         assert!(matches!(err, ManError::NotFound))
+    }
+
+    #[tokio::test]
+    async fn lookup_times_out() {
+        let config = ManLookupConfig {
+            timeout: Duration::from_millis(1),
+            ..ManLookupConfig::default()
+        };
+
+        let err = lookup_man_page("ls", None, &config).await.unwrap_err();
+
+        assert!(matches!(err, ManError::Timeout));
+    }
+
+    #[tokio::test]
+    async fn large_page_is_ok() {
+        // The `curl` page is ~260 KB on this system, well above the 64 KB OS
+        // pipe buffer. A wait-then-read design would deadlock on it.
+        let res = lookup_man_page("curl", None, &ManLookupConfig::default())
+            .await
+            .unwrap();
+
+        assert!(res.truncated);
+        assert!(!res.content.is_empty());
     }
 
     #[test]

@@ -19,7 +19,7 @@ the reason is recorded as a design decision or rationale.
 
 The current Rust implementation should provide:
 
-1. synchronous lookup of a named man page;
+1. lookup of a named man page;
 2. an optional man-page section;
 3. configurable returned-output limits;
 4. a visible truncation marker and `truncated` flag;
@@ -36,7 +36,6 @@ The following are currently deferred:
 * fully bounded streaming output collection;
 * complete portability across non-`man-db` implementations;
 * MCP-specific presentation and error formatting;
-* subprocess timeout handling (deferred until async/Tokio is introduced for web search).
 
 ---
 
@@ -88,7 +87,7 @@ systemctl
 The current domain signature is approximately:
 
 ```rust
-fn lookup_man_page(
+async fn lookup_man_page(
     topic: &str,
     section: Option<&str>,
     config: &ManLookupConfig,
@@ -243,6 +242,18 @@ truncate it afterward.
 This limits the returned result but does not limit peak memory usage while the
 subprocess is running.
 
+### Draining output
+
+The stdout and stderr pipes are drained concurrently with the wait for the
+child to exit.
+
+Waiting for the child to exit before reading is not safe: the OS pipe buffer
+holds 65536 bytes on the current platform, and a child that writes more than
+that blocks until the pipe is drained, so a wait-then-read design deadlocks.
+Several installed pages exceed the buffer (verified on the current system:
+`curl` ~260 KB, `git-config` ~311 KB, `cmake-modules` ~871 KB), so concurrent
+draining is a requirement, not an optimization.
+
 ### Deferred hardening
 
 A later implementation may collect output incrementally, retain only the
@@ -253,16 +264,13 @@ Bounded streaming collection is not required for the initial implementation.
 
 ---
 
-## 6. Timeout Handling — Deferred
+## 6. Timeout Handling
 
-Subprocess timeout handling is deferred until async/Tokio is introduced for
-web search.
+The timeout is enforced with the Tokio runtime: the subprocess is spawned
+with `tokio::process::Command`, and the wait — together with the concurrent
+pipe draining — is wrapped in `tokio::time::timeout`.
 
-The current synchronous implementation does not enforce a deadline. The
-`ManLookupConfig` struct retains a `timeout` field and `ManError::Timeout`
-exists in the error enum, but they are not exercised.
-
-When async support is added, the following requirements will apply:
+The following behavior applies:
 
 The timeout begins after the subprocess has been spawned.
 
@@ -278,6 +286,20 @@ Err(ManError::Timeout)
 ```
 
 The implementation must not leave the child running after returning a timeout.
+On the current implementation this holds because `tokio::process::Child::kill`
+sends SIGKILL on Unix and then waits for the child (reaps it), unlike the
+standard library's `Child::kill`, which does not wait.
+
+Note on orphaned helper processes: `man` forks its own helpers (sub-`man`
+processes and a groff formatting pipeline). On timeout only the direct child
+is killed and reaped; the helpers are orphaned and exit shortly afterwards.
+On a normal system, init reaps them. In containers where PID 1 does not reap
+(this workspace, where the agent harness is PID 1), each orphan left over
+from a timeout remains as a permanent zombie process. This only matters when
+a caller shrinks the timeout, since `man` does not approach the 10 second
+default in practice. Killing the whole process group (new session via
+`pre_exec`, then `kill(-pgid, SIGKILL)`) is the standard remedy and is
+deliberately deferred; see PROJECT.md.
 
 If the process exits naturally before the deadline, the timeout path must not
 run.
@@ -489,7 +511,10 @@ Useful smoke cases include:
 * a deliberately nonexistent topic;
 * an explicit section;
 * captured output inspection for terminal formatting;
-* exit-status verification.
+* exit-status verification;
+* a forced timeout (a millisecond-scale deadline) returning `ManError::Timeout`;
+* a page larger than the OS pipe buffer (e.g. `curl`) succeeding without
+  deadlocking.
 
 Tests should clearly distinguish assumptions about the host environment from
 portable domain behavior.
@@ -561,7 +586,6 @@ Cancellation should be reconsidered when the server gains:
 
 The following decisions should be made when they become relevant:
 
-* timeout mechanism (to be designed when async/Tokio is introduced);
 * whether output should eventually be collected with a hard streaming bound;
 * exact invalid-UTF-8 behavior;
 * final terminal-formatting cleanup method;

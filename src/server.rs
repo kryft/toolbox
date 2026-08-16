@@ -36,7 +36,7 @@ pub async fn handle_request(
                 .map_err(|_| mcp::invalid_params("bad params"))?;
 
             let result = match params.name.as_str() {
-                "man_page" => man_page::handle_call(params.arguments),
+                "man_page" => man_page::handle_call(params.arguments).await,
                 "fetch_url" => fetch_url::handle_call(params.arguments).await,
                 "search_web" => search_web::handle_call(params.arguments).await,
                 _other => Err(mcp::invalid_params("unknown tool")),

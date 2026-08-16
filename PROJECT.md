@@ -13,21 +13,16 @@ Learn Rust by building:
 
 Assume the user is an experienced programmer who is new to Rust.
 
-- Work on one small coherent task at a time.
-- Plan the next task together after reviewing the current code.
-- You should let me do the task unless I tell you to do it.
-- Don't give me the whole source code for a task unless I asked for it or it's very short.
-- Do not edit Rust source or tests unless I explicitly ask you to implement the change.
-- After diagnosing a problem, explain the cause and propose the smallest fix first.
-- Even for trivial or mechanical changes, stop and let me decide whether to implement them.
-- You may edit project documentation when I explicitly ask for documentation updates.
-- Explain Rust-specific design choices and compiler errors.
-- Answer questions and tangents directly before returning to implementation.
-- Prefer the simplest design that fits the current requirement.
-- Do not introduce advanced mechanisms such as explicit lifetimes, trait
-  objects, async, `Arc`, `Mutex`, or complex generics unless the current
-  problem genuinely benefits from them; explain the need first.
-- Use the existing source code as evidence of Rust concepts already encountered.
+* Work collaboratively in small coherent steps. Inspect the current code before planning a change.
+* If you encounter an unexpected complication that would require substantial additional reasoning, experimentation, or scope expansion beyond the current task, pause and explain what you found before pursuing it further. Let me decide whether to investigate it now, defer it, or continue with the original task. Small checks needed to understand or complete the current task are fine without asking.
+* By default, let me implement changes myself. Do not edit Rust source or tests unless I explicitly ask you to implement the change.
+* Prefer focused explanations and snippets over complete solutions, since the goal is for me to write and understand the Rust myself.
+* Prefer the simplest design or fix that satisfies the current requirement.
+* Explain Rust-specific design choices, unfamiliar language features, and compiler errors.
+* Avoid unnecessary complexity such as explicit lifetimes, trait objects, `Arc`, `Mutex`, or complex generics; introduce them when the problem genuinely benefits from them and explain why.
+* Answer questions and tangents directly before returning to implementation.
+* Use the existing source code as evidence of Rust concepts already encountered.
+* You may edit project documentation when I explicitly ask for documentation updates.
 
 ## Roadmap
 
@@ -49,9 +44,9 @@ This project initially targets MCP protocol version `2025-11-25`.
 
 Before implementing or changing MCP wire behavior, consult:
 
-- `docs/mcp/2025-11-25/SUMMARY.md` for a project-focused overview
-- the relevant vendored specification page in `docs/mcp/2025-11-25/`
-- `docs/mcp/2025-11-25/schema.ts` when exact field shapes are unclear
+* `docs/mcp/2025-11-25/SUMMARY.md` for a project-focused overview;
+* the relevant vendored specification page in `docs/mcp/2025-11-25/`;
+* `docs/mcp/2025-11-25/schema.ts` when exact field shapes are unclear.
 
 `SUMMARY.md` is generated guidance and may be incomplete or mistaken. The
 vendored specification and schema are authoritative.
@@ -60,63 +55,54 @@ vendored specification and schema are authoritative.
 
 The container includes the `rust-docs` and `rust-src` rustup components.
 
-When exact Rust API behavior or signatures matter, prefer checking the local
-official documentation rather than relying on model memory:
+When exact API behavior or signatures matter, verify them against the local
+documentation or source for the installed version rather than relying on model
+memory.
 
-- Documentation root: `rustup doc --path`
-- Toolchain root: `rustc --print sysroot`
-- Standard-library source:
+* Rust documentation: `rustup doc --path`
+* Rust sysroot: `rustc --print sysroot`
+* Standard-library source:
   `$(rustc --print sysroot)/lib/rustlib/src/rust/library`
+* Dependency source: locate the exact installed version under
+  `$CARGO_HOME/registry/src/`
+* Generated crate documentation, when available: `target/doc/`; generate focused
+  docs with `cargo doc -p <crate> --no-deps` when useful.
 
-For Rust crate API questions, prefer local documentation when available. Run cargo doc and inspect target/doc/ for the versions actually used by the project. Use rustup doc for standard-library/toolchain documentation.
-
-Search or render only the relevant files; do not load the full documentation
-into context unnecessarily.
-
-You can locate a specific standard library item with something like:
-
-```bash
-docs_root="$(dirname "$(rustup doc --path)")"
-find "$docs_root/std" -iname '*child*'
-rg -n 'try_wait|wait_with_output' "$docs_root/std"
-```
-
-You can inspect source with e.g.
-
-```bash
-rg -n 'pub fn try_wait' \
-  "$(rustc --print sysroot)/lib/rustlib/src/rust/library"
-```
-
-You can turn a specific HTML page into readeble text with
-
-```bash
-w3m -dump \
-  "$(dirname "$(rustup doc --path)")/std/process/struct.Child.html"
-```
+Use `rg`, local rustdoc HTML, or source as appropriate. Inspect only the
+relevant material rather than loading large documentation trees into context.
 
 ## Current State
 
 Architecture:
 
-- `main.rs` — async stdio loop
-- `server.rs` — MCP request routing
-- `mcp.rs` — JSON-RPC/MCP protocol types and shared helpers
-- `man_page.rs` — man-page tool
-- `fetch_url.rs` — async HTTP fetching with reqwest
+* `main.rs` — async stdio loop
+* `server.rs` — MCP request routing
+* `mcp.rs` — JSON-RPC/MCP protocol types and shared helpers
+* `man_page.rs` — man-page tool (async subprocess, timeout via Tokio)
+* `fetch_url.rs` — async HTTP fetching with reqwest
+* `search_web.rs` — SearXNG web search with reqwest
 
 Implemented:
 
-- MCP lifecycle and tool dispatch
-- `man_page`
-- `fetch_url`
-- async Tokio runtime
-- unit and end-to-end integration tests
-
-Current goal:
-
-- Add `search_web` using the local SearXNG instance.
+* MCP lifecycle and tool dispatch
+* `man_page`
+* `fetch_url`
+* `search_web` (local SearXNG instance)
+* subprocess timeout for `man_page` (concurrent pipe drain; kill + reap on deadline)
+* async Tokio runtime
+* unit and end-to-end integration tests
 
 Deferred:
 
-- subprocess timeout handling
+* Process-group kill for `man_page` timeouts (new session via `pre_exec` plus
+  `kill(-pgid, SIGKILL)`). `man` forks helper processes that are orphaned on
+  timeout; a normal init reaps them, but this container's PID 1 does not, so
+  they remain as zombies. Only worth adding if timeouts are expected to fire
+  in real use; it would require `unsafe` `pre_exec` and a `libc` dependency.
+
+Current goal:
+
+* Plan the next step together. Candidates:
+  - end-to-end integration test for `search_web` (depends on the local SearXNG instance);
+  - large-document fetching/storage and summarization (roadmap item 5);
+  - polish: `search_web` tool description and config handling.
