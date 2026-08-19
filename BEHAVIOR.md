@@ -290,16 +290,10 @@ On the current implementation this holds because `tokio::process::Child::kill`
 sends SIGKILL on Unix and then waits for the child (reaps it), unlike the
 standard library's `Child::kill`, which does not wait.
 
-Note on orphaned helper processes: `man` forks its own helpers (sub-`man`
-processes and a groff formatting pipeline). On timeout only the direct child
-is killed and reaped; the helpers are orphaned and exit shortly afterwards.
-On a normal system, init reaps them. In containers where PID 1 does not reap
-(this workspace, where the agent harness is PID 1), each orphan left over
-from a timeout remains as a permanent zombie process. This only matters when
-a caller shrinks the timeout, since `man` does not approach the 10 second
-default in practice. Killing the whole process group (new session via
-`pre_exec`, then `kill(-pgid, SIGKILL)`) is the standard remedy and is
-deliberately deferred; see PROJECT.md.
+Note on helper processes: `man` forks its own helpers (sub-`man` processes
+and a groff formatting pipeline). On timeout only the direct child is killed
+and reaped; the helpers are orphaned but short-lived, and a normal init
+(including Docker's `--init`) reaps them.
 
 If the process exits naturally before the deadline, the timeout path must not
 run.

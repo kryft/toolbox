@@ -92,14 +92,6 @@ Implemented:
 * async Tokio runtime
 * unit and end-to-end integration tests
 
-Deferred:
-
-* Process-group kill for `man_page` timeouts (new session via `pre_exec` plus
-  `kill(-pgid, SIGKILL)`). `man` forks helper processes that are orphaned on
-  timeout; a normal init reaps them, but this container's PID 1 does not, so
-  they remain as zombies. Only worth adding if timeouts are expected to fire
-  in real use; it would require `unsafe` `pre_exec` and a `libc` dependency.
-
 Current goal:
 
 * Plan the next step together. Candidates:
