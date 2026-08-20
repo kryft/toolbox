@@ -87,7 +87,7 @@ Implemented:
 * MCP lifecycle and tool dispatch
 * `man_page`
 * `fetch_url`
-* `search_web` (local SearXNG instance)
+* `search_web` (local SearXNG instance; `SEARXNG_URL` env var, optional `num_results` arg)
 * subprocess timeout for `man_page` (concurrent pipe drain; kill + reap on deadline)
 * async Tokio runtime
 * unit and end-to-end integration tests
@@ -95,6 +95,6 @@ Implemented:
 Current goal:
 
 * Plan the next step together. Candidates:
-  - end-to-end integration test for `search_web` (depends on the local SearXNG instance);
   - large-document fetching/storage and summarization (roadmap item 5);
-  - polish: `search_web` tool description and config handling.
+  - concurrency/resource control (roadmap item 6), if needed by item 5;
+  - plan the Rust agent separately (roadmap item 7).
