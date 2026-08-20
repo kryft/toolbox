@@ -30,13 +30,49 @@ Assume the user is an experienced programmer who is new to Rust.
 2. ~~Expose through minimal MCP server.~~
 3. ~~Introduce async and webpage fetching.~~
 4. ~~Add SearXNG web search.~~
-5. Add large-document fetching/storage and summarization as useful.
-6. Add concurrency/resource control as needed.
-7. Plan the Rust agent separately.
+5. Large-document support, tiered (see Design direction):
+   5a. Tier 1: `fetch_url` stores every fetch (raw file + JSON sidecar,
+       sha256-of-URL id); inline below a size threshold, id + preview above.
+   5b. Tier 2: `read_doc` (offset/limit) and in-document grep, so stored
+       documents can be narrowed without loading them.
+   5c. Tier 3: LLM chunk triage — tool-side one-shot calls to the local
+       llama.cpp endpoint, context-isolated, returning pointers to relevant
+       regions rather than text.
+6. Concurrency/resource control as needed (batch fetching, politeness,
+   long-running jobs).
+7. Plan the Rust agent separately, informed by the tier-3 agent loop.
 
 `BEHAVIOR.md` records the current intended behavior of the man-page tool.
 Treat it as revisable rather than immutable: verify questionable assumptions,
 and discuss proposed changes with the user before implementing them.
+
+## Design direction (web search / large documents)
+
+Goal: a free, powerful web-search tool for an LLM caller, where depth is
+decided by the user or the agent as needed.
+
+Key constraint: the caller's context window is the real limit, not disk.
+Storage is unbounded in principle (configurable resource limits, never hard
+capability ceilings); *narrowing* is the tool's job, and the agent only
+consumes small targeted slices.
+
+Tiers, climbed as needed:
+
+* Tier 0: `search_web` snippets (engine-generated, ~100-350 chars).
+* Tier 1: fetch & store the raw document (source of truth on disk).
+* Tier 2: grep / offset-limit reads over stored documents.
+* Tier 3: LLM chunk triage (context-isolated; returns locations + relevance,
+  not text).
+
+Tier 1 decisions (v1):
+
+* `fetch_url` always stores; 32 KB threshold (inline below, preview above).
+* Storage: `./data` (env `TOOLBOX_DATA`), `<sha256(url)>` raw file plus a
+  `<sha256(url)>.json` sidecar (url, fetched_at, content_type, bytes).
+* Re-fetch overwrites; no caching yet.
+
+Tier 3 endpoint (when we get there): llama.cpp at
+`http://172.17.0.1:8081/v1`, model `qwen3.8-27b-q4xl` (OpenAI-compatible).
 
 ## MCP protocol target
 
@@ -94,7 +130,6 @@ Implemented:
 
 Current goal:
 
-* Plan the next step together. Candidates:
-  - large-document fetching/storage and summarization (roadmap item 5);
-  - concurrency/resource control (roadmap item 6), if needed by item 5;
-  - plan the Rust agent separately (roadmap item 7).
+* Implement tier 1, step 1 (roadmap 5a): `sha2` dependency, a store function
+  (raw file + sidecar), and wire it into `fetch_url` with the inline/preview
+  threshold. See Roadmap and Design direction.
