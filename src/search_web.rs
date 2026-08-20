@@ -22,6 +22,8 @@ pub struct SearchConfig {
 #[derive(serde::Deserialize)]
 struct SearchArgs {
     query: String,
+    #[serde(default)]
+    num_results: Option<usize>,
 }
 
 impl Default for SearchConfig {
@@ -30,6 +32,16 @@ impl Default for SearchConfig {
             num_results: 5,
             url: String::from("http://172.17.0.1:8888"),
         }
+    }
+}
+
+impl SearchConfig {
+    fn new() -> Self {
+        let mut config = Self::default();
+        if let Ok(url) = std::env::var("SEARXNG_URL") {
+            config.url = url;
+        }
+        config
     }
 }
 
@@ -61,11 +73,16 @@ pub async fn search(query: &str, config: &SearchConfig) -> Result<String, reqwes
 pub fn tool_definition() -> Value {
     serde_json::json!({
         "name": "search_web",
-        "description": "Search the web.",
+        "description": "Search the web using SearXNG. Returns numbered results with title, snippet, and URL.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": { "type": "string"},
+                "num_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Maximum number of results to return (default 5).",
+                }
             },
             "required": ["query"]
         }
@@ -76,7 +93,12 @@ pub async fn handle_call(args: Value) -> Result<Value, mcp::JsonRpcErrorResponse
     let args: SearchArgs =
         serde_json::from_value(args).map_err(|_| mcp::invalid_params("invalid args"))?;
 
-    let text = search(&args.query, &SearchConfig::default()).await;
+    let mut config = SearchConfig::new();
+    if let Some(n) = args.num_results {
+        config.num_results = n;
+    }
+
+    let text = search(&args.query, &config).await;
 
     match text {
         Ok(res) => Ok(serde_json::json!({
