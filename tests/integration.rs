@@ -212,3 +212,30 @@ fn tools_call_fetch_url_success() {
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("Example Domain"));
 }
+
+// Requires a SearXNG instance at 172.17.0.1:8888 (or the SEARXNG_URL env var).
+// Asserts structure, not specific result text, which varies over time.
+#[test]
+fn tools_call_search_web_success() {
+    let mut h = Harness::new();
+
+    h.send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+    h.send_no_response(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+
+    let resp = h.send(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_web","arguments":{"query":"rust programming language","num_results":3}}}"#,
+    );
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 2);
+    assert_eq!(resp["result"]["isError"], false);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(!text.is_empty());
+    assert!(text.starts_with("1. "), "first result should be numbered");
+    assert!(text.contains("http"), "results should include URLs");
+    // num_results: 3 was requested; entries are joined by a blank line.
+    assert!(
+        text.matches("\n\n").count() < 3,
+        "requested at most 3 results, got more"
+    );
+}
