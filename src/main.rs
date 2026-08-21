@@ -3,6 +3,7 @@ mod man_page;
 mod mcp;
 mod search_web;
 mod server;
+mod store;
 
 use std::io::{self, Write};
 use tokio::io::AsyncBufReadExt;
