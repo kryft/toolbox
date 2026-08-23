@@ -61,6 +61,15 @@ pub fn invalid_params(msg: &str) -> JsonRpcErrorResponse {
     }
 }
 
+pub fn error_message_json(msg: &str) -> Value {
+    serde_json::json!({
+        "content": [
+            { "type": "text", "text": String::from(msg) },
+        ],
+        "isError": true
+    })
+}
+
 pub fn parse_message(message: &str) -> Result<JsonRpcMessage, JsonRpcError> {
     let value: Value = match serde_json::from_str(message) {
         Ok(v) => v,

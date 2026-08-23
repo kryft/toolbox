@@ -28,6 +28,25 @@ fn sha256_hex(s: &str) -> String {
     hash.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+pub fn doc_path(id: &str) -> Option<PathBuf> {
+    if id.len() != 64 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(data_dir().join(id))
+}
+
+pub fn load(id: &str) -> Result<Vec<u8>, String> {
+    let path = doc_path(id).ok_or_else(|| format!("invalid document id {id}"))?;
+
+    match fs::read(&path) {
+        Ok(bytes) => Ok(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("document not found: {id}"))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Store `body` under the sha256 of `url`; returns the id (hex string).
 pub fn save(url: &str, content_type: &str, body: &[u8]) -> std::io::Result<String> {
     let dir = data_dir();

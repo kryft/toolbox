@@ -3,6 +3,8 @@ use serde_json::Value;
 use crate::fetch_url;
 use crate::man_page;
 use crate::mcp;
+use crate::read_doc;
+use crate::search_doc;
 use crate::search_web;
 
 #[derive(serde::Deserialize)]
@@ -28,7 +30,12 @@ pub async fn handle_request(
             id: req.id,
             jsonrpc: "2.0".into(),
             result: serde_json::json!({
-                "tools": [man_page::tool_definition(), fetch_url::tool_definition(), search_web::tool_definition()]
+                "tools": [
+                    man_page::tool_definition(),
+                    fetch_url::tool_definition(),
+                    read_doc::tool_definition(),
+                    search_doc::tool_definition(),
+                    search_web::tool_definition()]
             }),
         }),
         "tools/call" => {
@@ -38,6 +45,8 @@ pub async fn handle_request(
             let result = match params.name.as_str() {
                 "man_page" => man_page::handle_call(params.arguments).await,
                 "fetch_url" => fetch_url::handle_call(params.arguments).await,
+                "read_doc" => read_doc::handle_call(params.arguments),
+                "search_doc" => search_doc::handle_call(params.arguments),
                 "search_web" => search_web::handle_call(params.arguments).await,
                 _other => Err(mcp::invalid_params("unknown tool")),
             }?;
@@ -93,10 +102,12 @@ mod tests {
         assert_eq!(resp.id, 2);
         let tools = &resp.result["tools"];
         assert!(tools.is_array());
-        assert_eq!(tools.as_array().unwrap().len(), 3);
+        assert_eq!(tools.as_array().unwrap().len(), 5);
         assert_eq!(tools[0]["name"], "man_page");
         assert_eq!(tools[1]["name"], "fetch_url");
-        assert_eq!(tools[2]["name"], "search_web");
+        assert_eq!(tools[2]["name"], "read_doc");
+        assert_eq!(tools[3]["name"], "search_doc");
+        assert_eq!(tools[4]["name"], "search_web");
     }
 
     #[tokio::test]

@@ -31,10 +31,10 @@ Assume the user is an experienced programmer who is new to Rust.
 3. ~~Introduce async and webpage fetching.~~
 4. ~~Add SearXNG web search.~~
 5. Large-document support, tiered (see Design direction):
-   5a. Tier 1: `fetch_url` stores every fetch (raw file + JSON sidecar,
-       sha256-of-URL id); inline below a size threshold, id + preview above.
-   5b. Tier 2: `read_doc` (offset/limit) and in-document grep, so stored
-       documents can be narrowed without loading them.
+   5a. ~~Tier 1: `fetch_url` stores every fetch (raw file + JSON sidecar,
+       sha256-of-URL id); inline below a size threshold, id + preview above.~~
+   5b. ~~Tier 2: `read_doc` (offset/limit) and in-document grep, so stored
+       documents can be narrowed without loading them.~~
    5c. Tier 3: LLM chunk triage — tool-side one-shot calls to the local
        llama.cpp endpoint, context-isolated, returning pointers to relevant
        regions rather than text.
@@ -64,12 +64,21 @@ Tiers, climbed as needed:
 * Tier 3: LLM chunk triage (context-isolated; returns locations + relevance,
   not text).
 
-Tier 1 decisions (v1):
+Tier 1 decisions (v1, done):
 
 * `fetch_url` always stores; 32 KB threshold (inline below, preview above).
 * Storage: `./data` (env `TOOLBOX_DATA`), `<sha256(url)>` raw file plus a
   `<sha256(url)>.json` sidecar (url, fetched_at, content_type, bytes).
 * Re-fetch overwrites; no caching yet.
+
+Tier 2 decisions (v1, done):
+
+* `read_doc`: default window 4096 bytes; id must be the full sha256 hex
+  (no prefix matching).
+* `search_doc`: case-insensitive plain substring, line-oriented, max 20
+  matches, 200-char snippets; zero matches is a normal (non-error) result.
+* Known limitation (roadmap 6): both read the whole file with blocking
+  `fs::read` — fine for web pages, needs streaming for multi-GB docs.
 
 Tier 3 endpoint (when we get there): llama.cpp at
 `http://172.17.0.1:8081/v1`, model `qwen3.8-27b-q4xl` (OpenAI-compatible).
@@ -115,21 +124,26 @@ Architecture:
 * `server.rs` — MCP request routing
 * `mcp.rs` — JSON-RPC/MCP protocol types and shared helpers
 * `man_page.rs` — man-page tool (async subprocess, timeout via Tokio)
-* `fetch_url.rs` — async HTTP fetching with reqwest
+* `fetch_url.rs` — async HTTP fetching with reqwest (stores every fetch)
 * `search_web.rs` — SearXNG web search with reqwest
+* `store.rs` — on-disk document store (sha256 id, raw file + JSON sidecar)
+* `read_doc.rs` — offset/limit reads of stored documents
+* `search_doc.rs` — substring search within stored documents
 
 Implemented:
 
 * MCP lifecycle and tool dispatch
 * `man_page`
-* `fetch_url`
+* `fetch_url` (stores every fetch in `data/`; inline below 32 KB, id + preview above)
 * `search_web` (local SearXNG instance; `SEARXNG_URL` env var, optional `num_results` arg)
+* `read_doc` / `search_doc` (tier-2 narrowing over stored documents)
 * subprocess timeout for `man_page` (concurrent pipe drain; kill + reap on deadline)
 * async Tokio runtime
 * unit and end-to-end integration tests
 
 Current goal:
 
-* Implement tier 1, step 1 (roadmap 5a): `sha2` dependency, a store function
-  (raw file + sidecar), and wire it into `fetch_url` with the inline/preview
-  threshold. See Roadmap and Design direction.
+* Design and implement tier 3 (roadmap 5c): LLM chunk triage via the local
+  llama.cpp endpoint. Settle the output contract (region pointers +
+  relevance, no body text) and the long-running-call behavior before coding.
+  See Design direction.

@@ -1,6 +1,8 @@
 mod fetch_url;
 mod man_page;
 mod mcp;
+mod read_doc;
+mod search_doc;
 mod search_web;
 mod server;
 mod store;
