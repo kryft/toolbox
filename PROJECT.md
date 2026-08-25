@@ -35,9 +35,10 @@ Assume the user is an experienced programmer who is new to Rust.
        sha256-of-URL id); inline below a size threshold, id + preview above.~~
    5b. ~~Tier 2: `read_doc` (offset/limit) and in-document grep, so stored
        documents can be narrowed without loading them.~~
-   5c. Tier 3: LLM chunk triage — tool-side one-shot calls to the local
-       llama.cpp endpoint, context-isolated, returning pointers to relevant
-       regions rather than text.
+   5c. Tier 3: LLM document analysis — `triage_doc` (ranked hits: pointers
+       + relevance + verbatim snippets) and `summarize_doc` (coherent story
+       + structural map) via one-shot calls to the local llama.cpp endpoint.
+       Design settled; implementation pending.
 6. Concurrency/resource control as needed (batch fetching, politeness,
    long-running jobs).
 7. Plan the Rust agent separately, informed by the tier-3 agent loop.
@@ -80,8 +81,111 @@ Tier 2 decisions (v1, done):
 * Known limitation (roadmap 6): both read the whole file with blocking
   `fs::read` — fine for web pages, needs streaming for multi-GB docs.
 
-Tier 3 endpoint (when we get there): llama.cpp at
-`http://172.17.0.1:8081/v1`, model `qwen3.8-27b-q4xl` (OpenAI-compatible).
+Tier 3 decisions (design settled, implementation pending):
+
+Two new tools on shared machinery. Purpose split: `triage_doc` is semantic
+narrowing (search-engine role: ranked hits, for when `search_doc`'s lexical
+matching fails on vocabulary mismatch); `summarize_doc` is survey (coherent
+story + structural map, query optional). Both operate on stored documents
+(`fetch_url` ids) via one-shot calls to the local llama.cpp endpoint.
+
+Endpoint facts (measured):
+
+* llama.cpp OpenAI-compatible at `http://172.17.0.1:8081/v1`, model
+  `qwen3.8-27b-q4xl` (Q4_K, n_ctx 200192). The server is dedicated to this
+  project, so the whole context window is available to a single call.
+* Prefill ~2,850 tok/s (batch), generation ~148 tok/s.
+* The model thinks by default; disable with
+  `"chat_template_kwargs": {"enable_thinking": false}`. All calls use
+  temperature 0 and small max_tokens.
+* 256KB of text ≈ 40–55k tokens; one 256KB-chunk call ≈ 15–25s.
+
+Shared machinery:
+
+* `llm.rs`: `LlmConfig` from env — `LLAMA_URL`, `LLAMA_MODEL`,
+  `LLAMA_CHUNK_BYTES` (default 256KB); one-shot `chat()` under a 60s
+  `tokio::time::timeout` (man_page.rs pattern); lenient `extract_json()`
+  (strip code fences, first `{` .. last `}`).
+* `chunk.rs`: chunks of `chunk_bytes` snapped to line boundaries, constant
+  1/8 overlap. Chunk N's exclusive zone = all bytes after the inherited
+  overlap; exclusive zones are exactly contiguous, so every byte belongs to
+  exactly one chunk (no duplicates, no gaps). Line table (line starts in
+  bytes) for span conversion. The document is decoded once with
+  `String::from_utf8_lossy`; for valid UTF-8 (the norm for web docs)
+  offsets are identical to the raw bytes that `read_doc`/`search_doc`
+  take (v1 consistency decision).
+* Hard cap of 64 chunks on both tools; over-cap → error pointing at
+  offset/limit.
+* Unified args: `{id, query, offset?, limit?}` — query required for
+  triage, optional for summarize.
+
+`triage_doc` contract:
+
+* Per-chunk model output: `{"regions": [{line_start, line_end, score,
+  note}], "continuation_note": "..."}` — ≤5 regions, 1-based lines within
+  the chunk.
+* Exclusive-zone rule (prompt): report only regions that *start* in the
+  exclusive zone. Out-of-zone or invalid model output is dropped tool-side.
+* `score` 0–10 is ordinal priority (relative within this document), not
+  calibrated confidence. `note` ≤15 words, descriptive (not a paraphrase
+  of the snippet). `continuation_note` ≤2 sentences — an "editor's note"
+  handoff, passed verbatim to the next chunk's call as prior context and
+  not shown in the final output.
+* Hits are rendered tool-side: score + note + location (byte + line span)
+  + verbatim snippet starting at the line containing the region start,
+  ~256 chars, line-bounded (grep-like context). The LLM returns pointers +
+  metadata only; the snippet is a mechanical slice (no text relay → no
+  drift). Top 5 hits. Zero matches is a normal (non-error) result.
+
+`summarize_doc` contract:
+
+* N == 1 (subset fits in one chunk — the common case): a single call
+  returns `{"story", "map"}` directly.
+* N > 1, map phase: call N's input = query + S1..S(N-1) verbatim + chunk
+  N raw + overlap note. S_N = `{"summary" (≤250 words), "pointers" (≤5:
+  {line_start, line_end, label ≤10 words})}` — query-aware, scope: this
+  chunk only, written with the earlier summaries in view (consistent
+  terminology, no re-covering the overlap, may note relations to earlier
+  parts). S_N is fixed once generated and never re-compressed. Prompt
+  metaknowledge: a later editor assembles the final story and prunes, and
+  the summarizer sees the past but not the future (book-reading
+  constraint) → include borderline material rather than guessing at global
+  importance.
+* Reduce ("editor") phase: input = query + all S_N with tool-converted
+  absolute byte spans + pointers; output = `{"story" (≤400 words, coherent
+  whole-document story from the query's perspective), "map" (≤10:
+  {start, end, label}, selected/merged from the per-chunk candidates)}`.
+  The tool converts lines → absolute bytes before the reduce so the model
+  does no arithmetic.
+* Why the reduce exists (settled rationale): it is the only role with a
+  whole-document view. Unique value: document-level net assessment
+  (judgments that belong to no single chunk) + list→narrative composition
+  + fixed output budget + map selection. Per-chunk writers see the past
+  but not the future, so they cannot make final relevance calls.
+* Open constant: story length fixed (≤400 words) vs proportional to chunk
+  count (constant density, capped) — decide after seeing real outputs.
+* Documented large-doc workflow (belongs in the tool description): rough
+  overview of the whole → pick spans from the map → re-summarize the
+  subset (same summary budget, less to fit) → `read_doc` for verbatim
+  detail.
+
+Long-running behavior:
+
+* Calls are sequential (politeness to a single local server; parallelism is
+  roadmap 6). The stdio loop blocks for the duration of the call (accepted
+  for v1; revisit under roadmap 6).
+* Triage: a chunk that times out or yields unparseable JSON is reported as
+  untriaged and the scan continues. Summarize: the chain is sequential and
+  dependent, so a failed chunk fails the whole call (stateless; a retry
+  re-runs from chunk 1).
+
+Tests:
+
+* Unit: chunker (overlap, exclusive zones, line table), `extract_json`,
+  output formatting, span clamping.
+* Integration: local mock LLM server (TcpListener + canned JSON,
+  fetch_url.rs pattern); core functions take an explicit `LlmConfig` so
+  tests can point at the mock.
 
 ## MCP protocol target
 
@@ -143,7 +247,8 @@ Implemented:
 
 Current goal:
 
-* Design and implement tier 3 (roadmap 5c): LLM chunk triage via the local
-  llama.cpp endpoint. Settle the output contract (region pointers +
-  relevance, no body text) and the long-running-call behavior before coding.
-  See Design direction.
+* Implement tier 3 (roadmap 5c): `triage_doc` and `summarize_doc` on the
+  shared `llm.rs` (one-shot llama.cpp calls) and `chunk.rs` (overlapping
+  chunks, exclusive zones). The design is settled — see Design direction,
+  Tier 3 decisions. Suggested order: `llm.rs` → `chunk.rs` → `triage_doc`
+  → `summarize_doc`.
