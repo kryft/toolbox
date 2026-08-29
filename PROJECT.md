@@ -102,11 +102,13 @@ Endpoint facts (measured):
 
 Shared machinery:
 
-* `llm.rs`: `LlmConfig` from env — `LLAMA_URL`, `LLAMA_MODEL`,
-  `LLAMA_CHUNK_BYTES` (default 256KB); one-shot `chat()` under a 60s
+* `llm.rs`: `LlmConfig` from env — `LLAMA_URL`, `LLAMA_MODEL`; one-shot
+  `chat()` under a 60s
   `tokio::time::timeout` (man_page.rs pattern); lenient `extract_json()`
   (strip code fences, first `{` .. last `}`).
-* `chunk.rs`: chunks of `chunk_bytes` snapped to line boundaries, constant
+* `chunk.rs`: `default_chunk_bytes()` from env `LLAMA_CHUNK_BYTES`
+  (default 256KB, read by `chunk.rs`, not `llm.rs`); chunks of
+  `chunk_bytes` snapped to line boundaries, constant
   1/8 overlap. Chunk N's exclusive zone = all bytes after the inherited
   overlap; exclusive zones are exactly contiguous, so every byte belongs to
   exactly one chunk (no duplicates, no gaps). Line table (line starts in
@@ -118,6 +120,56 @@ Shared machinery:
   offset/limit.
 * Unified args: `{id, query, offset?, limit?}` — query required for
   triage, optional for summarize.
+
+chunk.rs design (implemented; 11 unit tests pass):
+
+* Note: chunk 0's end also goes through `snap_forward` (a raw cut there
+  would break the "tail < O" case and leave chunk 0 ending mid-line).
+
+
+* `Chunk<'a>` borrows the doc (no per-chunk clones): `start`, `end` (both
+  line-aligned byte offsets in the decoded doc), `exclusive_start` (==
+  `start` for chunk 0, else the previous chunk's end), `text: &'a str`,
+  `line_starts: Vec<usize>` (absolute byte offset of each line of this
+  chunk — a slice of one doc-level table built for the scanned range),
+  `context_lines` (lines before `exclusive_start`; 0 for chunk 0).
+* `split<'a>(doc, from, limit: Option<usize>, chunk_bytes, max_chunks)
+  -> Vec<Chunk<'a>>`. `limit` = max bytes to scan from `from` (input
+  window, mirroring read_doc's byte limit); `None` = to end of doc —
+  deliberately NOT a small default window like read_doc's 4096, because a
+  small window on a *search* tool yields misleading "no hits" false
+  negatives; the 64-chunk cap is the protection instead.
+* Layout: raw step C − O (O = C/8); start snaps *back* to a line start,
+  end snaps *forward* to a line end; invariant `exclusive_start_N ==
+  end_{N−1}` by construction, so exclusive zones tile the range exactly.
+* Boundary conditions: (1) `range_end = min(from + limit, total)` with
+  `saturating_add`; empty range → zero chunks (caller errors "nothing to
+  scan"); (2) `from` snaps back to its line start (a scan may begin up to
+  one line early); (3) end forward-snap includes the rest of the cut line;
+  (4) emit a next chunk only while `prev_end < range_end` — progress is at
+  least C − O, so no infinite loop; works down to C < 8 where O = 0 (exact
+  tiling, no overlap); (5) tail < O → final chunk starts deep in the
+  previous one and carries just the tail; (6) last line may lack a `\n`;
+  a line's span is `[line_start, next_line_start)` or `range_end` for the
+  final line (needed to convert a region's `line_end` to a byte end);
+  (7) `max_chunks` stops emission; the tool reports "scanned X of Y";
+  (8) snap-back never snap-forward (forward would shrink the overlap and
+  could drop bytes out of every chunk's view); (9) user offsets may land
+  mid-character in a valid UTF-8 doc — never slice the str at a user offset
+  (backward scan on `doc.as_bytes()`); floor `range_end` with
+  `floor_char_boundary` (safe side: scan never passes `from + limit`).
+  After that, every str slice is at a line start (inherently a boundary) or
+  the floored `range_end`.
+* No tail overlap (deferred): the owner of a straddling region doesn't see
+  its post-cut tail; mitigated by a "continues" note + reading with margin.
+  Trigger to add: hits systematically missed at boundaries. Adding it later
+  doesn't touch the exclusive-zone invariant.
+* Tests (deterministic, ~20 lines of 40-byte lines, C = 160): exclusive
+  zones tile (`exclusive_start[i+1] == end[i]`, first start at snapped
+  `from`, last `end == range_end`); starts line-aligned; `context_lines`
+  correct; tail < O case; mid-line `from` snap; `limit` Some/None;
+  `max_chunks` respected; C = 4 (O = 0) exact tiling; `from ≥ total` →
+  empty vec.
 
 `triage_doc` contract:
 
@@ -145,8 +197,13 @@ Shared machinery:
   N raw + overlap note. S_N = `{"summary" (≤250 words), "pointers" (≤5:
   {line_start, line_end, label ≤10 words})}` — query-aware, scope: this
   chunk only, written with the earlier summaries in view (consistent
-  terminology, no re-covering the overlap, may note relations to earlier
-  parts). S_N is fixed once generated and never re-compressed. Prompt
+  terminology; the leading overlap is context, not new content — but a
+  logical unit straddling the seam is summarized by this, the later part,
+  flagged as a continuation; may note relations to earlier parts). Seam-unit
+  pointers may extend into the leading overlap — valid, not an error;
+  summarize's validation clamps to the whole chunk text, not the exclusive
+  zone (contrast triage, which hard-drops out-of-zone starts). S_N is fixed
+  once generated and never re-compressed. Prompt
   metaknowledge: a later editor assembles the final story and prunes, and
   the summarizer sees the past but not the future (book-reading
   constraint) → include borderline material rather than guessing at global
@@ -156,7 +213,11 @@ Shared machinery:
   whole-document story from the query's perspective), "map" (≤10:
   {start, end, label}, selected/merged from the per-chunk candidates)}`.
   The tool converts lines → absolute bytes before the reduce so the model
-  does no arithmetic.
+  does no arithmetic. The reduce prompt states the seam mechanics
+  (overlap ≈1/8; seam units are summarized by the later part) so the editor
+  merges them without double-counting. Note the asymmetry: triage keeps the
+  hard exclusive-zone rule because it has no editor pass to reconcile
+  duplication.
 * Why the reduce exists (settled rationale): it is the only role with a
   whole-document view. Unique value: document-level net assessment
   (judgments that belong to no single chunk) + list→narrative composition
@@ -244,11 +305,23 @@ Implemented:
 * subprocess timeout for `man_page` (concurrent pipe drain; kill + reap on deadline)
 * async Tokio runtime
 * unit and end-to-end integration tests
+* `llm.rs` (complete: `LlmConfig` with `LLAMA_URL`/`LLAMA_MODEL` env
+  fallbacks, `chat()`, `extract_json` + 11 tests; mock-server test for
+  `chat` deferred until first consumer)
+* `chunk.rs` (line-aligned overlapping chunks, exclusive zones, 11 unit
+  tests; `LLAMA_CHUNK_BYTES` read by `default_chunk_bytes()`)
 
 Current goal:
 
 * Implement tier 3 (roadmap 5c): `triage_doc` and `summarize_doc` on the
   shared `llm.rs` (one-shot llama.cpp calls) and `chunk.rs` (overlapping
-  chunks, exclusive zones). The design is settled — see Design direction,
-  Tier 3 decisions. Suggested order: `llm.rs` → `chunk.rs` → `triage_doc`
-  → `summarize_doc`.
+  chunks, exclusive zones). `llm.rs` and `chunk.rs` are both complete and
+  tested (env config in both; 11 chunk tests; full suite 54 unit + 12
+  integration green). Next small step: `triage_doc.rs` first cut, stopping
+  BEFORE the LLM loop — args `{id, query (required), offset?, limit?}`,
+  handler pipeline to `Vec<Chunk>` (store fetch, one lossy decode,
+  `split` with `default_chunk_bytes()` + cap 64), and the two pre-LLM
+  error paths (zero chunks → "nothing to scan"; over-cap = 64 chunks AND
+  `last.end < total`). Handler shape follows `search_doc.rs`; full
+  contract in Design direction. After that: `summarize_doc.rs`, then wire
+  both into `server.rs` + `main.rs`.

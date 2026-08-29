@@ -1,4 +1,6 @@
+mod chunk;
 mod fetch_url;
+mod llm;
 mod man_page;
 mod mcp;
 mod read_doc;
