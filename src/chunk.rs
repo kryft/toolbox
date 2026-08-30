@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct Chunk<'a> {
     pub start: usize,
     pub end: usize,

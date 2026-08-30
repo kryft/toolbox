@@ -38,7 +38,7 @@ Assume the user is an experienced programmer who is new to Rust.
    5c. Tier 3: LLM document analysis — `triage_doc` (ranked hits: pointers
        + relevance + verbatim snippets) and `summarize_doc` (coherent story
        + structural map) via one-shot calls to the local llama.cpp endpoint.
-       Design settled; implementation pending.
+       Design settled; `triage_doc` done, `summarize_doc` next.
 6. Concurrency/resource control as needed (batch fetching, politeness,
    long-running jobs).
 7. Plan the Rust agent separately, informed by the tier-3 agent loop.
@@ -81,7 +81,7 @@ Tier 2 decisions (v1, done):
 * Known limitation (roadmap 6): both read the whole file with blocking
   `fs::read` — fine for web pages, needs streaming for multi-GB docs.
 
-Tier 3 decisions (design settled, implementation pending):
+Tier 3 decisions (design settled; `triage_doc` in progress):
 
 Two new tools on shared machinery. Purpose split: `triage_doc` is semantic
 narrowing (search-engine role: ranked hits, for when `search_doc`'s lexical
@@ -103,9 +103,9 @@ Endpoint facts (measured):
 Shared machinery:
 
 * `llm.rs`: `LlmConfig` from env — `LLAMA_URL`, `LLAMA_MODEL`; one-shot
-  `chat()` under a 60s
-  `tokio::time::timeout` (man_page.rs pattern); lenient `extract_json()`
-  (strip code fences, first `{` .. last `}`).
+  `chat()` under a per-call `tokio::time::timeout` = base 60 s + 10 ms per
+  `max_tokens` token (see `triage_doc` addenda; man_page.rs pattern);
+  lenient `extract_json()` (strip code fences, first `{` .. last `}`).
 * `chunk.rs`: `default_chunk_bytes()` from env `LLAMA_CHUNK_BYTES`
   (default 256KB, read by `chunk.rs`, not `llm.rs`); chunks of
   `chunk_bytes` snapped to line boundaries, constant
@@ -119,7 +119,8 @@ Shared machinery:
 * Hard cap of 64 chunks on both tools; over-cap → error pointing at
   offset/limit.
 * Unified args: `{id, query, offset?, limit?}` — query required for
-  triage, optional for summarize.
+  triage, optional for summarize; triage alone adds an optional
+  `context` (see triage contract).
 
 chunk.rs design (implemented; 11 unit tests pass):
 
@@ -161,7 +162,8 @@ chunk.rs design (implemented; 11 unit tests pass):
   After that, every str slice is at a line start (inherently a boundary) or
   the floored `range_end`.
 * No tail overlap (deferred): the owner of a straddling region doesn't see
-  its post-cut tail; mitigated by a "continues" note + reading with margin.
+  its post-cut tail; mitigated by a "continues" flag in the region's
+  `note` + reading with margin.
   Trigger to add: hits systematically missed at boundaries. Adding it later
   doesn't touch the exclusive-zone invariant.
 * Tests (deterministic, ~20 lines of 40-byte lines, C = 160): exclusive
@@ -174,20 +176,103 @@ chunk.rs design (implemented; 11 unit tests pass):
 `triage_doc` contract:
 
 * Per-chunk model output: `{"regions": [{line_start, line_end, score,
-  note}], "continuation_note": "..."}` — ≤5 regions, 1-based lines within
-  the chunk.
+  note}]}` — ≤`max_hits` regions, 1-based lines within the chunk.
 * Exclusive-zone rule (prompt): report only regions that *start* in the
   exclusive zone. Out-of-zone or invalid model output is dropped tool-side.
-* `score` 0–10 is ordinal priority (relative within this document), not
-  calibrated confidence. `note` ≤15 words, descriptive (not a paraphrase
-  of the snippet). `continuation_note` ≤2 sentences — an "editor's note"
-  handoff, passed verbatim to the next chunk's call as prior context and
-  not shown in the final output.
+* `score` is ordinal priority (relative within this document), not
+  calibrated confidence. The prompt states the floor as 1–10, where 1 is
+  still a real, passing mention of the queried subject (tool-side
+  validation stays lenient at 0–10). `note` ≤15 words, descriptive (not
+  a paraphrase of the snippet).
+* Per-chunk calls are stateless — no relay between chunks (parallelizable;
+  contrast summarize's running story: triage is a map, summarize a
+  reduce). Optional call-level `context` string (e.g. the `summarize_doc`
+  story, or a targeted re-summarize such as a glossary of self-defined
+  terms) is prepended to every chunk's prompt as rough orientation —
+  useful where a mid-doc chunk is hard to interpret without the beginning;
+  the chunk text is authoritative. No size cap (v1); the tool description
+  conveys the intent.
 * Hits are rendered tool-side: score + note + location (byte + line span)
   + verbatim snippet starting at the line containing the region start,
   ~256 chars, line-bounded (grep-like context). The LLM returns pointers +
   metadata only; the snippet is a mechanical slice (no text relay → no
-  drift). Top 5 hits. Zero matches is a normal (non-error) result.
+  drift). Top `max_hits` (default 5). Zero matches is a normal (non-error)
+  result.
+
+`triage_doc` addenda (settled during implementation):
+
+* `max_hits` argument: optional, default 5, hard cap 1000 (clamped,
+  documented in the schema). One knob governs both the per-chunk prompt cap
+  (model reports ≤ N regions per chunk — a low fixed per-chunk cap would
+  silently truncate dense chunks before global ranking) and the global
+  top-N across all chunks. ~450 rendered chars per hit, so N is a caller
+  context budget, not a capability cap; the 64-chunk scan cap and the 1000
+  knob are the only hard limits.
+* `max_tokens = 128 + 64 * max_hits` (kept in `u32`); the per-call timeout
+  in `llm::chat` is `cfg.timeout + max_tokens * 10 ms` (assumes 100 tok/s,
+  below the measured 148) — `cfg.timeout` (60 s) becomes a *base* covering
+  prefill + connection.
+* Chunk text is line-numbered in the prompt (1-based chunk line + `\t`,
+  ~5–6% token overhead) — without it the model cannot report line numbers
+  reliably, and both exclusive-zone validation and snippet placement depend
+  on them.
+* The prompt states the exclusive line chunk-relative, 1-based:
+  `chunk.context_lines + 1`. The system prompt template lives in
+  `system_prompt()` — `format!` requires a literal at the call site, so
+  a const template is not possible; the contract is pinned by a test.
+* Relevance rules (prompt, added after the first live KJV triage): a
+  region qualifies only if it directly mentions the queried subject
+  (thematic adjacency alone does not); "at most N" is a cap, not a
+  target — padding is explicitly forbidden and a zero-region report is
+  explicitly licensed. Pre-fix, 36% of the KJV top-1000 were
+  self-admitted "no animals" padding.
+* Context-suppression fix (prompt, after the v2 KJV re-run): with the
+  old context clause, chunks whose overlap lines already contained
+  query-relevant content under-reported continuations in their exclusive
+  zone — the model deduped against the context (Deut 14's clean/unclean
+  list: 0 hits at ctx≈695, twice, vs 74 with ctx=0; Lev 11 and Balaam's
+  donkey also lost). The clause now says the overlap is orientation only
+  and must not be used to skip content. Verified on the exact failing
+  chunk: 66 hits incl. the Deut 14 lists, 0 junk.
+* Observed score usage (healthy runs): the model works in ~7–10
+  (7 = metaphor/implicit, e.g. "brutish men", "mighty hunter"; 8 =
+  explicit but background; 9 = prominent; 10 = central). 1–6 were only
+  ever produced by v2's context-suppressed chunks (self-admitted
+  non-mentions), so the prompt's score-1 floor is effectively dormant.
+  Refined with a phrasing experiment (same window, 3 queries):
+  "mentions of animals" → 210, "the character of God" → 0,
+  "descriptions of God" → 288, all scoring 7–10. The query controls
+  the qualifying *gate* (does the strict "directly mentions" clause
+  open at all — abstract phrasings close it) and the tail's edge
+  (peripheral mentions admitted at 7), not the score band. The score
+  is a coarse directness ladder, not a graded-relevance spectrum.
+  Known consequence: abstract phrasings of a pervasive subject can
+  return a silent 0 (indistinguishable from "not in document").
+  Possible future fix: a `theme` prompt mode alongside `mention` —
+  not softening the shared clause (would re-open padding).
+* Parseable-but-off-contract JSON (e.g. missing `regions` key) → treated
+  as no hits (lenient v1); chat/parse failure → chunk reported untriaged
+  (byte span + reason), scan continues. "0 hit(s)" is only honest when
+  every chunk was triaged.
+* Doc-absolute line numbers via a running newline counter
+  (`lines_before`): first chunk counts `doc[..chunk.start]`, each later
+  chunk adds the count over `[prev.start..chunk.start]`.
+* Output format (pinned by tests): header
+  `Triage for 'QUERY': N hit(s), scanned M chunk(s), bytes a..b`
+  (QUERY = the query verbatim — no angle brackets in the output);
+  one `   untriaged: bytes a..b (reason)` line per untriaged chunk (scan
+  order) when any; then hits as `1. [score] note` / `   line ls..le,
+  bytes a..b` / `   |`-prefixed snippet — continuation lines (untriaged
+  and hit details) share a 3-space indent.
+* Oversized output (N = 1000 → hundreds of KB) is *not* stored in v1: the
+  tool description carries the cost warning (sequential scan; per-chunk
+  calls grow with N). Store-and-preview for oversized triage output
+  (fetch_url pattern, derived-artifact id scheme) is a deferred follow-up
+  step.
+* Manual end-to-end test (run): KJV 4.4 MB, 20 chunks, `max_hits: 1000`
+  — ~42 min live, 1000 hits, 0 untriaged, output saved to
+  `kjv_animals_triage.txt`; surfaced the padding bug fixed by the
+  relevance-rules bullet above.
 
 `summarize_doc` contract:
 
@@ -228,7 +313,8 @@ chunk.rs design (implemented; 11 unit tests pass):
 * Documented large-doc workflow (belongs in the tool description): rough
   overview of the whole → pick spans from the map → re-summarize the
   subset (same summary budget, less to fit) → `read_doc` for verbatim
-  detail.
+  detail. The overview (or a targeted re-summarize, e.g. a glossary) can
+  be handed to `triage_doc` as `context`.
 
 Long-running behavior:
 
@@ -246,7 +332,10 @@ Tests:
   output formatting, span clamping.
 * Integration: local mock LLM server (TcpListener + canned JSON,
   fetch_url.rs pattern); core functions take an explicit `LlmConfig` so
-  tests can point at the mock.
+  tests can point at the mock. Note: `chat()` builds a fresh
+  `reqwest::Client` per call → one TCP connection per chunk → the mock
+  must loop `listener.incoming()` and serve one canned body per
+  connection.
 
 ## MCP protocol target
 
@@ -294,6 +383,9 @@ Architecture:
 * `store.rs` — on-disk document store (sha256 id, raw file + JSON sidecar)
 * `read_doc.rs` — offset/limit reads of stored documents
 * `search_doc.rs` — substring search within stored documents
+* `llm.rs` — llama.cpp client (env config, one-shot `chat`, `extract_json`)
+* `chunk.rs` — line-aligned overlapping chunks with exclusive zones
+* `triage_doc.rs` — tier-3 LLM triage of stored documents
 
 Implemented:
 
@@ -309,19 +401,53 @@ Implemented:
   fallbacks, `chat()`, `extract_json` + 11 tests; mock-server test for
   `chat` deferred until first consumer)
 * `chunk.rs` (line-aligned overlapping chunks, exclusive zones, 11 unit
-  tests; `LLAMA_CHUNK_BYTES` read by `default_chunk_bytes()`)
+  tests; `LLAMA_CHUNK_BYTES` read by `default_chunk_bytes()`; `Chunk`
+  derives `Debug`)
+* `triage_doc` (complete): args `{id, query, offset?, limit?, context?,
+  max_hits?}` (default 5, clamped to 1000 inside `triage()`); `prepare`;
+  validated helpers `snippet_for` + `region_hits`/`region_from`; the
+  per-chunk LLM loop (line-numbered prompt with the exclusive line,
+  `max_tokens = 128 + 64 * max_hits`, running `lines_before`,
+  untriaged-then-continue, stable `total_cmp` ranking, top-N, pinned
+  render format). `llm::chat` timeout is base + 10 ms per token,
+  `LlmConfig` fields are pub for tests. Tests: 2 mock-LLM unit tests
+  (pinned format; max_hits cap + tie order) plus a structural live
+  stdio integration test (endpoint dependency commented).
+* multi-line tool descriptions (`DESCRIPTION` const per tool; `fetch_url`
+  documents the inline/stored split and the large-doc workflow)
 
 Current goal:
 
 * Implement tier 3 (roadmap 5c): `triage_doc` and `summarize_doc` on the
   shared `llm.rs` (one-shot llama.cpp calls) and `chunk.rs` (overlapping
-  chunks, exclusive zones). `llm.rs` and `chunk.rs` are both complete and
-  tested (env config in both; 11 chunk tests; full suite 54 unit + 12
-  integration green). Next small step: `triage_doc.rs` first cut, stopping
-  BEFORE the LLM loop — args `{id, query (required), offset?, limit?}`,
-  handler pipeline to `Vec<Chunk>` (store fetch, one lossy decode,
-  `split` with `default_chunk_bytes()` + cap 64), and the two pre-LLM
-  error paths (zero chunks → "nothing to scan"; over-cap = 64 chunks AND
-  `last.end < total`). Handler shape follows `search_doc.rs`; full
-  contract in Design direction. After that: `summarize_doc.rs`, then wire
-  both into `server.rs` + `main.rs`.
+  chunks, exclusive zones). `triage_doc` complete; suite 77 unit + 13
+  integration green.
+* Earlier step (done): the triage LLM loop — `triage()` with `max_hits`,
+  mock-LLM unit tests, wiring (arg/schema/DESCRIPTION, real
+  `handle_call`), per-call timeout in `llm::chat`, structural live
+  integration test. One format clarification: the pinned header's
+  `<query>` is placeholder notation — the query renders verbatim, no
+  angle brackets.
+* Earlier step (done): relevance-rules prompt fix after the KJV triage
+  showed 36% padding in the top-1000 — qualifies = direct mention of the
+  queried subject, score-1 floor (still a real mention), explicit
+  zero-region license, cap-not-target wording; template moved to
+  `system_prompt()`, pinned by test. Verified on the calibration chunk:
+  219 hits (was 201), zero self-admitted junk, tail is real, latency
+  unchanged.
+* Earlier step (done): `LlmConfig` knobs — `temperature: f32` (default
+  0.0; triage keeps 0, summarize planned ~0.2) and
+  `reasoning_effort: Option<String>` (None = today's explicit
+  thinking-off via `chat_template_kwargs`; `Some(e)` sends the knob and
+  drops `chat_template_kwargs`). Body construction factored into pure
+  `chat_request()`, pinned by 2 tests. `Default` reads
+  `LLAMA_TEMPERATURE` / `LLAMA_REASONING_EFFORT` env vars, so live A/B
+  runs are an env change, not a rebuild. The server thinks by default
+  ("extra high"); the endpoint accepts `reasoning_effort` none/low.
+* This step (done): context-suppression prompt fix (addendum above)
+  plus full KJV re-run (v3).
+* Next small step: `summarize_doc.rs` per the settled contract (N == 1
+  direct `{"story","map"}` call; N > 1 map phase with the running story,
+  then the editor/reduce phase), wired the same way. The mock LLM
+  helper currently lives in `triage_doc`'s test module — move it to a
+  shared spot (e.g. `llm.rs`) when `summarize_doc` needs it.

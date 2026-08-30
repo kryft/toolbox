@@ -5,10 +5,19 @@ use crate::mcp;
 const INLINE_LIMIT: usize = 32 * 1024;
 const PREVIEW_BYTES: usize = 2048;
 
+const DESCRIPTION: &str = r#"Fetch a URL and store it as a document.
+Responses under 32 KB are returned inline as text; larger responses
+return a document id and a short preview. Narrow stored documents with
+search_doc (exact substring), read_doc (byte windows), triage_doc
+(LLM-ranked relevance), or summarize_doc (overview + structure map).
+Large documents: fetch_url -> summarize_doc for a rough overview ->
+triage_doc or re-summarize the spans you care about -> read_doc for
+verbatim detail."#;
+
 pub fn tool_definition() -> Value {
     serde_json::json!({
         "name": "fetch_url",
-        "description": "Fetch a URL and return its text content",
+        "description": DESCRIPTION,
         "inputSchema": {
             "type": "object",
             "properties": {

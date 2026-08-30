@@ -82,12 +82,13 @@ fn tools_list() {
     assert_eq!(resp["id"], 2);
     let tools = &resp["result"]["tools"];
     assert!(tools.is_array());
-    assert_eq!(tools.as_array().unwrap().len(), 5);
+    assert_eq!(tools.as_array().unwrap().len(), 6);
     assert_eq!(tools[0]["name"], "man_page");
     assert_eq!(tools[1]["name"], "fetch_url");
     assert_eq!(tools[2]["name"], "read_doc");
     assert_eq!(tools[3]["name"], "search_doc");
     assert_eq!(tools[4]["name"], "search_web");
+    assert_eq!(tools[5]["name"], "triage_doc");
 }
 
 #[test]
@@ -247,8 +248,7 @@ fn tools_call_search_web_success() {
 /// background OS thread (not tokio) so the sync test code can block
 /// freely without starving a single-threaded runtime.
 fn start_fake_server(body: String) -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("failed to bind fake server");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind fake server");
     let url = format!("http://{}", listener.local_addr().unwrap());
 
     std::thread::spawn(move || {
@@ -307,7 +307,10 @@ fn doc_flow_fake_server() {
     assert_eq!(read["result"]["isError"], false);
     let read_text = read["result"]["content"][0]["text"].as_str().unwrap();
     assert!(read_text.contains("Test Page"));
-    assert!(!read_text.contains("[more:"), "small doc should not be truncated");
+    assert!(
+        !read_text.contains("[more:"),
+        "small doc should not be truncated"
+    );
 
     // 3. Search: "apple" is on lines 5 and 6 (1-based); byte offsets are line starts.
     let line5 = doc.find("<p>The first").unwrap();
@@ -334,20 +337,24 @@ fn doc_flow_fake_server() {
         r#"{{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{{"name":"search_doc","arguments":{{"id":"{id}","pattern":"banana"}}}}}}"#
     ));
     assert_eq!(none["result"]["isError"], false);
-    assert!(none["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("0 match(es)"));
+    assert!(
+        none["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("0 match(es)")
+    );
 
     // 6. Invalid id is a tool error (isError), not a protocol error.
     let bad = h.send(
         r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_doc","arguments":{"id":"zz"}}}"#,
     );
     assert_eq!(bad["result"]["isError"], true);
-    assert!(bad["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("invalid document id"));
+    assert!(
+        bad["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("invalid document id")
+    );
 }
 
 #[test]
@@ -360,7 +367,10 @@ fn large_doc_preview_and_paging() {
         ));
     }
     doc.push_str("</html>\n");
-    assert!(doc.len() > 32 * 1024, "doc must exceed the inline threshold");
+    assert!(
+        doc.len() > 32 * 1024,
+        "doc must exceed the inline threshold"
+    );
 
     let url = start_fake_server(doc.clone());
     let mut h = Harness::new();
@@ -398,10 +408,12 @@ fn large_doc_preview_and_paging() {
     let read100_200 = h.send(&format!(
         r#"{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"read_doc","arguments":{{"id":"{id}","offset":100,"limit":100}}}}}}"#
     ));
-    assert!(read100_200["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("bytes 100..200:"));
+    assert!(
+        read100_200["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("bytes 100..200:")
+    );
 
     // 4. Search hits the 20-match cap: 25 matches, 5 hidden.
     let first_line_start = doc.find("<p>line 000").unwrap();
@@ -412,4 +424,72 @@ fn large_doc_preview_and_paging() {
     assert!(search_text.contains("25 match(es)"));
     assert!(search_text.contains(&format!("line 2, byte {first_line_start}:")));
     assert!(search_text.contains("... and 5 more matches"));
+}
+
+// Requires the llama.cpp endpoint at 172.17.0.1:8081 (or the LLAMA_URL
+// env var). Asserts structure, not hit content, which varies with the model.
+#[test]
+fn tools_call_triage_doc_success() {
+    let doc = [
+        "<!doctype html>",
+        "<html><body>",
+        "<p>The first paragraph mentions rust.</p>",
+        "<p>Another paragraph.</p>",
+        "</body></html>",
+    ]
+    .join("\n");
+
+    let url = start_fake_server(doc.clone());
+    let mut h = Harness::new();
+
+    h.send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+    h.send_no_response(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+
+    // 1. Fetch and store the document (small -> inline branch).
+    let fetch = h.send(&format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"fetch_url","arguments":{{"url":"{url}"}}}}}}"#
+    ));
+    assert_eq!(fetch["result"]["isError"], false);
+    let id = fetch["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("[stored: ")
+        .and_then(|s| s.split(' ').next())
+        .unwrap();
+
+    // 2. Live triage: the single chunk must actually be triaged, so the
+    //    output has the pinned header and no untriaged line.
+    let ok = h.send(&format!(
+        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"triage_doc","arguments":{{"id":"{id}","query":"what is rust"}}}}}}"#
+    ));
+    assert_eq!(ok["result"]["isError"], false);
+    let ok_text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        ok_text.starts_with("Triage for 'what is rust':"),
+        "unexpected: {ok_text}"
+    );
+    assert!(
+        ok_text.contains(&format!("scanned 1 chunk(s), bytes 0..{}", doc.len())),
+        "unexpected: {ok_text}"
+    );
+    assert!(!ok_text.contains("untriaged"), "chunk must be triaged: {ok_text}");
+
+    // 3. Offset past the end of the doc is a tool error, not a protocol error.
+    let past = h.send(&format!(
+        r#"{{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{{"name":"triage_doc","arguments":{{"id":"{id}","query":"rust","offset":{}}}}}}}"#,
+        doc.len() + 100
+    ));
+    assert_eq!(past["result"]["isError"], true);
+    let past_text = past["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        past_text.contains("nothing to scan"),
+        "unexpected: {past_text}"
+    );
+
+    // 4. Empty query is a protocol error (INVALID_PARAMS), not a tool error.
+    let empty = h.send(&format!(
+        r#"{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"triage_doc","arguments":{{"id":"{id}","query":""}}}}}}"#
+    ));
+    assert!(empty["id"].is_null());
+    assert_eq!(empty["error"]["code"], -32602);
 }

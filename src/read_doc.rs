@@ -27,10 +27,15 @@ pub fn read_chunk(id: &str, offset: usize, limit: usize) -> Result<String, Strin
     ))
 }
 
+const DESCRIPTION: &str = r#"Read a byte window of a doc that was fetched and stored by
+fetch_url (default 4096 bytes). If the window ends before the doc does,
+the output ends with a "[more: bytes X..Y available]" marker; pass that
+offset as the next `offset` to continue reading."#;
+
 pub fn tool_definition() -> Value {
     serde_json::json!({
         "name": "read_doc",
-        "description": "Read a segment of a doc that was fetched and stored by the fetch_url tool.",
+        "description": DESCRIPTION,
         "inputSchema": {
             "type": "object",
             "properties": {

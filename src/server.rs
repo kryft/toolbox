@@ -6,6 +6,7 @@ use crate::mcp;
 use crate::read_doc;
 use crate::search_doc;
 use crate::search_web;
+use crate::triage_doc;
 
 #[derive(serde::Deserialize)]
 struct CallToolParams {
@@ -35,7 +36,8 @@ pub async fn handle_request(
                     fetch_url::tool_definition(),
                     read_doc::tool_definition(),
                     search_doc::tool_definition(),
-                    search_web::tool_definition()]
+                    search_web::tool_definition(),
+                    &triage_doc::tool_definition()]
             }),
         }),
         "tools/call" => {
@@ -48,6 +50,7 @@ pub async fn handle_request(
                 "read_doc" => read_doc::handle_call(params.arguments),
                 "search_doc" => search_doc::handle_call(params.arguments),
                 "search_web" => search_web::handle_call(params.arguments).await,
+                "triage_doc" => triage_doc::handle_call(params.arguments).await,
                 _other => Err(mcp::invalid_params("unknown tool")),
             }?;
 
@@ -102,12 +105,13 @@ mod tests {
         assert_eq!(resp.id, 2);
         let tools = &resp.result["tools"];
         assert!(tools.is_array());
-        assert_eq!(tools.as_array().unwrap().len(), 5);
+        assert_eq!(tools.as_array().unwrap().len(), 6);
         assert_eq!(tools[0]["name"], "man_page");
         assert_eq!(tools[1]["name"], "fetch_url");
         assert_eq!(tools[2]["name"], "read_doc");
         assert_eq!(tools[3]["name"], "search_doc");
         assert_eq!(tools[4]["name"], "search_web");
+        assert_eq!(tools[5]["name"], "triage_doc");
     }
 
     #[tokio::test]

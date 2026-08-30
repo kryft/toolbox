@@ -70,10 +70,14 @@ pub async fn search(query: &str, config: &SearchConfig) -> Result<String, reqwes
         .join("\n\n"))
 }
 
+const DESCRIPTION: &str = r#"Search the web using SearXNG. Returns numbered results with
+title, engine-generated snippet, and URL. Snippets are short; use
+fetch_url on a URL to read the full page."#;
+
 pub fn tool_definition() -> Value {
     serde_json::json!({
         "name": "search_web",
-        "description": "Search the web using SearXNG. Returns numbered results with title, snippet, and URL.",
+        "description": DESCRIPTION,
         "inputSchema": {
             "type": "object",
             "properties": {

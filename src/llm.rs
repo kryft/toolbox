@@ -3,9 +3,15 @@ use serde;
 use std::time::Duration;
 
 pub struct LlmConfig {
-    base_url: String,
-    model: String,
-    timeout: Duration,
+    pub base_url: String,
+    pub model: String,
+    pub timeout: Duration,
+    /// Sampling temperature (0.0 = deterministic).
+    pub temperature: f32,
+    /// None → thinking explicitly off via `chat_template_kwargs` (the
+    /// server thinks by default); Some(effort) → send `reasoning_effort`
+    /// and let it own thinking.
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -16,6 +22,11 @@ impl Default for LlmConfig {
             model: std::env::var("LLAMA_MODEL")
                 .unwrap_or_else(|_| String::from("qwen3.8-27b-q4xl")),
             timeout: Duration::from_secs(60),
+            temperature: std::env::var("LLAMA_TEMPERATURE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0),
+            reasoning_effort: std::env::var("LLAMA_REASONING_EFFORT").ok(),
         }
     }
 }
@@ -35,6 +46,32 @@ struct Message {
     content: Option<String>,
 }
 
+/// Builds the chat-completion request body. `reasoning_effort` and
+/// `chat_template_kwargs` are mutually exclusive: None pins thinking off,
+/// Some(e) hands control to the knob.
+fn chat_request(
+    cfg: &LlmConfig,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": cfg.model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user},
+        ],
+        "temperature": cfg.temperature,
+        "max_tokens": max_tokens,
+    });
+    match &cfg.reasoning_effort {
+        Some(effort) => body["reasoning_effort"] = serde_json::json!(effort),
+        None => body["chat_template_kwargs"] =
+            serde_json::json!({ "enable_thinking": false }),
+    }
+    body
+}
+
 pub async fn chat(
     cfg: &LlmConfig,
     system: &str,
@@ -43,18 +80,11 @@ pub async fn chat(
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
 
-    let body = serde_json::json!({
-        "model": cfg.model,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user},
-        ],
-        "temperature": 0,
-        "max_tokens": max_tokens,
-        "chat_template_kwargs": { "enable_thinking": false }
-    });
+    let body = chat_request(cfg, system, user, max_tokens);
 
-    match tokio::time::timeout(cfg.timeout, async {
+    let timeout = cfg.timeout + Duration::from_millis(u64::from(max_tokens) * 10);
+
+    match tokio::time::timeout(timeout, async {
         let resp = client
             .post(&format!("{}/chat/completions", cfg.base_url))
             .json(&body)
@@ -184,5 +214,30 @@ Sure, here it is:
         // Braces were found; the failure must come from serde, not the
         // "no JSON object" path.
         assert!(!err.contains("no JSON object"), "unexpected error: {err}");
+    }
+
+    fn cfg_with(reasoning_effort: Option<&str>) -> LlmConfig {
+        LlmConfig {
+            base_url: "http://mock".to_string(),
+            model: "mock".to_string(),
+            timeout: Duration::from_secs(5),
+            temperature: 0.0,
+            reasoning_effort: reasoning_effort.map(String::from),
+        }
+    }
+
+    #[test]
+    fn request_body_pins_thinking_off_when_no_reasoning_effort() {
+        let body = chat_request(&cfg_with(None), "sys", "usr", 100);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(body["temperature"], serde_json::json!(0.0));
+    }
+
+    #[test]
+    fn request_body_reasoning_effort_replaces_template_kwargs() {
+        let body = chat_request(&cfg_with(Some("low")), "sys", "usr", 100);
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("chat_template_kwargs").is_none());
     }
 }

@@ -27,10 +27,16 @@ fn find_lines(body: &str, pattern: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
+const DESCRIPTION: &str = r#"Search for an exact substring in a doc that was fetched and
+stored by fetch_url. Case-insensitive, line-oriented; returns up to 20
+matches with line number, byte offset, and a short snippet. Zero matches
+is a normal result, not an error. For semantic matching (when the exact
+wording differs), use triage_doc instead."#;
+
 pub fn tool_definition() -> Value {
     serde_json::json!({
         "name": "search_doc",
-        "description": "Search for a string in a doc that was fetched and stored by the fetch_url tool.",
+        "description": DESCRIPTION,
         "inputSchema": {
             "type": "object",
             "properties": {
