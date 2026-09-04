@@ -18,6 +18,12 @@ const DESCRIPTION: &str = r#"Find the parts of a doc (stored by fetch_url) most 
 query. An LLM analyzes the document chunk by chunk, so this is slower
 than search_doc; use it for semantic matching, e.g. when search_doc's
 exact substring search misses on vocabulary mismatch.
+Query phrasing controls the scan: "mentions of X" / "where does X
+appear" look for mentions of specific things; "views on X" / "anything
+that bears on X" look for treatments of a theme (add "possibly" or
+"even tangentially" for a broader sweep). Bare abstract phrases ("the
+character of X") tend to return zero — phrase the theme as what to
+look for.
 Returns up to max_hits (default 5, max 1000) hits: relevance score,
 short note, byte/line location, and a verbatim snippet. Zero hits is a
 normal result, not an error.
@@ -32,11 +38,14 @@ large max_hits on a large doc is slow and yields a large result."#;
 fn system_prompt(exclusive_line: usize, max_hits: usize) -> String {
     format!(
         concat!(
-            "Find the parts of this document chunk that contain relevant mentions of the query.\n",
+            "Find the parts of this document chunk that are relevant to the query.\n",
             "Respond with a JSON object only: {{\"regions\": [{{\"line_start\": n, \"line_end\": n, \"score\": s, \"note\": t}}]}}\n",
             "- line numbers are 1-based within the chunk, line_end >= line_start\n",
             "- lines before line {} are repeated context from the previous chunk, for orientation only: never report them, and never use them to skip content; report relevant regions in the remaining lines even if they continue a topic visible in the context\n",
-            "- a region qualifies only if it directly mentions the queried subject; never report a region that merely touches the query's theme or contains no relevant mention\n",
+            "- first interpret the query: a query about specific things (e.g. \"mentions of X\", \"where does X appear\") asks for mentions; a query about a theme, property, question, or subject (e.g. \"the character of X\", \"views on X\") asks for treatments of it\n",
+            "- a mention query: a region qualifies only if it directly mentions the queried things; never report a region that merely touches their general theme\n",
+            "- a theme query: a region qualifies if it bears on the queried subject, by describing, discussing, or clearly exemplifying it, even when the passage's main topic is something else; never report a region that merely grazes the subject\n",
+            "- breadth: if the query explicitly asks for anything even possibly or tangentially relevant, include peripheral bearings; otherwise include only clearly non-incidental bearings\n",
             "- report at most {} regions, most relevant first, and never more than the number of qualifying regions you found; padding with weak regions is wrong\n",
             "- if the chunk contains no qualifying region, respond with {{\"regions\": []}}\n",
             "- score: 1-10, ordinal priority within this document, not calibrated confidence; 1 is still a real, passing mention of the queried subject\n",
@@ -734,11 +743,14 @@ mod tests {
         let chunks = prepare(&doc, 0, None, 64).unwrap();
         let (system, _user) = chunk_prompt("what is rust", None, &chunks[0], 5);
         let expected = concat!(
-            "Find the parts of this document chunk that contain relevant mentions of the query.\n",
+            "Find the parts of this document chunk that are relevant to the query.\n",
             "Respond with a JSON object only: {\"regions\": [{\"line_start\": n, \"line_end\": n, \"score\": s, \"note\": t}]}",
             "\n- line numbers are 1-based within the chunk, line_end >= line_start\n",
             "- lines before line 1 are repeated context from the previous chunk, for orientation only: never report them, and never use them to skip content; report relevant regions in the remaining lines even if they continue a topic visible in the context\n",
-            "- a region qualifies only if it directly mentions the queried subject; never report a region that merely touches the query's theme or contains no relevant mention\n",
+            "- first interpret the query: a query about specific things (e.g. \"mentions of X\", \"where does X appear\") asks for mentions; a query about a theme, property, question, or subject (e.g. \"the character of X\", \"views on X\") asks for treatments of it\n",
+            "- a mention query: a region qualifies only if it directly mentions the queried things; never report a region that merely touches their general theme\n",
+            "- a theme query: a region qualifies if it bears on the queried subject, by describing, discussing, or clearly exemplifying it, even when the passage's main topic is something else; never report a region that merely grazes the subject\n",
+            "- breadth: if the query explicitly asks for anything even possibly or tangentially relevant, include peripheral bearings; otherwise include only clearly non-incidental bearings\n",
             "- report at most 5 regions, most relevant first, and never more than the number of qualifying regions you found; padding with weak regions is wrong\n",
             "- if the chunk contains no qualifying region, respond with {\"regions\": []}\n",
             "- score: 1-10, ordinal priority within this document, not calibrated confidence; 1 is still a real, passing mention of the queried subject\n",

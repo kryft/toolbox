@@ -248,8 +248,37 @@ chunk.rs design (implemented; 11 unit tests pass):
   is a coarse directness ladder, not a graded-relevance spectrum.
   Known consequence: abstract phrasings of a pervasive subject can
   return a silent 0 (indistinguishable from "not in document").
-  Possible future fix: a `theme` prompt mode alongside `mention` —
-  not softening the shared clause (would re-open padding).
+  Tested fix (v4, reverted): softening the clause to "genuinely
+  addresses the query / substantive treatment (describing, discussing,
+  clearly exemplifying)" regressed all three controls (animals 210→131,
+  character of God 0→0, descriptions 288→10) — the model reads added
+  ambiguity as a reason to report *less* (anti-padding primes
+  conservatism), so a single shared gate cannot be strict for binary
+  queries and permissive for themes.
+* Query-adaptive prompt (adopted after the v4 failure; one tool, the
+  query phrasing controls the scan): classify line ("first interpret
+  the query: mentions of X → mentions; theme/property/question →
+  treatments") + branch-scoped gates (mention: v3 wording; theme:
+  "bears on ... even when the passage's main topic is something else")
+  + breadth line (query asks for "possibly / tangentially" relevant →
+  include peripheral bearings). Critical finding from the variant
+  matrix: the OPENING line is the key — "contain relevant mentions of
+  the query" primes mention semantics and overrides the branch gates
+  (every variant keeping v3's opening returned 0 for the theme query);
+  the neutral "are relevant to the query" opens them. Final matrix
+  (same window, temp 0): animals 210→220 (no cost), "anything that
+  could possibly bear on the character of God, even tangentially"
+  0→120 (quality verified: top = creation/image/covenant, tail =
+  sovereignty/justice bearings), bare "the character of God" still 0 —
+  the classify step does not flip bare abstract noun phrases; now a
+  documented phrasing requirement in DESCRIPTION. Natural phrasing
+  verified: "anything that tells us something about what god is like"
+  → 24 hits (default non-incidental tier); the same ask with
+  "possibly ... even tangentially" → 120 — the strictness knob is
+  observable end-to-end, zero junk in both. Temperature check
+  (0.7): the gate opens as a lottery (224 hits, then 0 on the repeat)
+  and even good queries wobble (descriptions 288→23), so temperature
+  stays 0 for triage.
 * Parseable-but-off-contract JSON (e.g. missing `regions` key) → treated
   as no hits (lenient v1); chat/parse failure → chunk reported untriaged
   (byte span + reason), scan continues. "0 hit(s)" is only honest when
@@ -446,6 +475,11 @@ Current goal:
   ("extra high"); the endpoint accepts `reasoning_effort` none/low.
 * This step (done): context-suppression prompt fix (addendum above)
   plus full KJV re-run (v3).
+* This step (done): query-adaptive triage prompt (addendum above) —
+  mention and theme queries in one tool, steered by query phrasing;
+  zero cost to the mention control (220 vs 210), breadth sweep
+  validated (120 hits on the KJV window), DESCRIPTION documents the
+  phrasing contract.
 * Next small step: `summarize_doc.rs` per the settled contract (N == 1
   direct `{"story","map"}` call; N > 1 map phase with the running story,
   then the editor/reduce phase), wired the same way. The mock LLM
