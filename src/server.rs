@@ -6,6 +6,7 @@ use crate::mcp;
 use crate::read_doc;
 use crate::search_doc;
 use crate::search_web;
+use crate::summarize_doc;
 use crate::triage_doc;
 
 #[derive(serde::Deserialize)]
@@ -37,7 +38,8 @@ pub async fn handle_request(
                     read_doc::tool_definition(),
                     search_doc::tool_definition(),
                     search_web::tool_definition(),
-                    &triage_doc::tool_definition()]
+                    &triage_doc::tool_definition(),
+                    summarize_doc::tool_definition()]
             }),
         }),
         "tools/call" => {
@@ -51,6 +53,7 @@ pub async fn handle_request(
                 "search_doc" => search_doc::handle_call(params.arguments),
                 "search_web" => search_web::handle_call(params.arguments).await,
                 "triage_doc" => triage_doc::handle_call(params.arguments).await,
+                "summarize_doc" => summarize_doc::handle_call(params.arguments).await,
                 _other => Err(mcp::invalid_params("unknown tool")),
             }?;
 
@@ -105,13 +108,14 @@ mod tests {
         assert_eq!(resp.id, 2);
         let tools = &resp.result["tools"];
         assert!(tools.is_array());
-        assert_eq!(tools.as_array().unwrap().len(), 6);
+        assert_eq!(tools.as_array().unwrap().len(), 7);
         assert_eq!(tools[0]["name"], "man_page");
         assert_eq!(tools[1]["name"], "fetch_url");
         assert_eq!(tools[2]["name"], "read_doc");
         assert_eq!(tools[3]["name"], "search_doc");
         assert_eq!(tools[4]["name"], "search_web");
         assert_eq!(tools[5]["name"], "triage_doc");
+        assert_eq!(tools[6]["name"], "summarize_doc");
     }
 
     #[tokio::test]
@@ -167,5 +171,27 @@ mod tests {
 
         assert_eq!(err.id, Some(Value::from(6)));
         assert_eq!(err.error.code, mcp::METHOD_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn tools_call_summarize_doc_not_implemented() {
+        let req = make_request(
+            Value::from(7),
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "summarize_doc",
+                "arguments": { "id": "abc" }
+            })),
+        );
+        let resp = handle_request(req).await.unwrap();
+
+        assert_eq!(resp.id, 7);
+        assert_eq!(resp.result["isError"], true);
+        assert!(
+            resp.result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("not implemented")
+        );
     }
 }

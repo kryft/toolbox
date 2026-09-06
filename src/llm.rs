@@ -20,7 +20,7 @@ impl Default for LlmConfig {
             base_url: std::env::var("LLAMA_URL")
                 .unwrap_or_else(|_| String::from("http://172.17.0.1:8081/v1")),
             model: std::env::var("LLAMA_MODEL")
-                .unwrap_or_else(|_| String::from("qwen3.8-27b-q4xl")),
+                .unwrap_or_else(|_| String::from("qwen3.8-27b")),
             timeout: Duration::from_secs(60),
             temperature: std::env::var("LLAMA_TEMPERATURE")
                 .ok()
@@ -128,6 +128,59 @@ pub fn extract_json(text: &str) -> Result<serde_json::Value, String> {
         return Err("no closing brace found".into());
     };
     serde_json::from_str(&candidate[start..end + 1]).map_err(|e| e.to_string())
+}
+
+/// Serves canned chat-completion responses, one per connection.
+/// `chat()` builds a fresh reqwest::Client per call, so each call is
+/// one TCP connection; the mock loops until the bodies run out.
+#[cfg(test)]
+pub(crate) fn start_mock_llm(bodies: Vec<String>) -> String {
+    use std::io::{BufRead, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("failed to bind mock llm");
+    let url = format!("http://{}", listener.local_addr().unwrap());
+
+    std::thread::spawn(move || {
+        for body in bodies {
+            let Ok((mut socket, _)) = listener.accept() else { break };
+            let mut reader = std::io::BufReader::new(&socket);
+            // Read request headers until the blank line; the small
+            // test bodies ride along in the same buffer fills.
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let content = serde_json::json!({
+                "choices": [{ "message": { "content": body } }]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                content.len(),
+                content
+            );
+            let _ = socket.write_all(response.as_bytes());
+        }
+    });
+
+    url
+}
+
+#[cfg(test)]
+pub(crate) fn mock_config(url: &str) -> LlmConfig {
+    LlmConfig {
+        base_url: url.to_string(),
+        model: "mock".to_string(),
+        timeout: std::time::Duration::from_secs(5),
+        temperature: 0.0,
+        reasoning_effort: None,
+    }
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ mod search_doc;
 mod search_web;
 mod server;
 mod store;
+mod summarize_doc;
 mod triage_doc;
 
 use std::io::{self, Write};

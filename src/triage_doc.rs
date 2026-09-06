@@ -50,6 +50,10 @@ fn system_prompt(exclusive_line: usize, max_hits: usize) -> String {
             "- if the chunk contains no qualifying region, respond with {{\"regions\": []}}\n",
             "- score: 1-10, ordinal priority within this document, not calibrated confidence; 1 is still a real, passing mention of the queried subject\n",
             "- note: at most 15 words describing why the region matters; do not paraphrase the text\n",
+            // Guardrail (added after the chunk-10 truncation incident): a plain line, no
+            // bullet — this exact form is what the A/B battery validated (bit-identical
+            // healthy output 2/2 on the previously degenerate chunk and on chunk 0).
+            "Your output must be exactly one complete, syntactically valid JSON object with no text before or after it. Never write reasoning, deliberation, or commentary anywhere in the output.\n",
         ),
         exclusive_line,
         max_hits
@@ -590,64 +594,12 @@ mod tests {
 
     // --- triage (mock LLM) ---
 
-    /// Serves canned chat-completion responses, one per connection.
-    /// `chat()` builds a fresh reqwest::Client per call, so each chunk's
-    /// call is one TCP connection; the mock loops until the bodies run
-    /// out. (Move to a shared test helper when summarize_doc needs it.)
-    fn start_mock_llm(bodies: Vec<String>) -> String {
-        use std::io::{BufRead, Write};
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("failed to bind mock llm");
-        let url = format!("http://{}", listener.local_addr().unwrap());
-
-        std::thread::spawn(move || {
-            for body in bodies {
-                let Ok((mut socket, _)) = listener.accept() else { break };
-                let mut reader = std::io::BufReader::new(&socket);
-                // Read request headers until the blank line; the small
-                // test bodies ride along in the same buffer fills.
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    if line == "\r\n" {
-                        break;
-                    }
-                }
-                let content = serde_json::json!({
-                    "choices": [{ "message": { "content": body } }]
-                })
-                .to_string();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    content.len(),
-                    content
-                );
-                let _ = socket.write_all(response.as_bytes());
-            }
-        });
-
-        url
-    }
-
-    fn mock_config(url: &str) -> llm::LlmConfig {
-        llm::LlmConfig {
-            base_url: url.to_string(),
-            model: "mock".to_string(),
-            timeout: std::time::Duration::from_secs(5),
-            temperature: 0.0,
-            reasoning_effort: None,
-        }
-    }
-
     /// numbered(10) with chunk_bytes 64 yields exactly 3 chunks:
     /// [0,75) / [60,135) / [120,150) with lines_before 0 / 4 / 8.
     #[tokio::test]
     async fn triage_loop_renders_pinned_format() {
         let doc = numbered(10); // 150 bytes, 15-byte lines
-        let url = start_mock_llm(vec![
+        let url = llm::start_mock_llm(vec![
             // chunk 0: high + mid regions, one past the chunk end (dropped)
             serde_json::json!({
                 "regions": [
@@ -669,7 +621,7 @@ mod tests {
             .to_string(),
         ]);
 
-        let out = triage(&doc, "what filler is here", None, 0, None, 64, 5, &mock_config(&url))
+        let out = triage(&doc, "what filler is here", None, 0, None, 64, 5, &llm::mock_config(&url))
             .await
             .unwrap();
 
@@ -705,7 +657,7 @@ mod tests {
     #[tokio::test]
     async fn triage_loop_caps_output_at_max_hits() {
         let doc = numbered(10);
-        let url = start_mock_llm(vec![
+        let url = llm::start_mock_llm(vec![
             serde_json::json!({
                 "regions": [
                     {"line_start": 4, "line_end": 4, "score": 9, "note": "high score here"},
@@ -722,7 +674,7 @@ mod tests {
             .to_string(),
         ]);
 
-        let out = triage(&doc, "filler", None, 0, None, 64, 2, &mock_config(&url))
+        let out = triage(&doc, "filler", None, 0, None, 64, 2, &llm::mock_config(&url))
             .await
             .unwrap();
 
@@ -755,6 +707,7 @@ mod tests {
             "- if the chunk contains no qualifying region, respond with {\"regions\": []}\n",
             "- score: 1-10, ordinal priority within this document, not calibrated confidence; 1 is still a real, passing mention of the queried subject\n",
             "- note: at most 15 words describing why the region matters; do not paraphrase the text\n",
+            "Your output must be exactly one complete, syntactically valid JSON object with no text before or after it. Never write reasoning, deliberation, or commentary anywhere in the output.\n",
         );
         assert_eq!(system, expected);
     }
