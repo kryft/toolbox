@@ -3,3 +3,5 @@
 .cargo
 .rustup
 /data/
+/experiments/
+ninfer.log

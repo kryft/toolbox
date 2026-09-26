@@ -55,8 +55,7 @@ fn system_prompt(exclusive_line: usize, max_hits: usize) -> String {
             // healthy output 2/2 on the previously degenerate chunk and on chunk 0).
             "Your output must be exactly one complete, syntactically valid JSON object with no text before or after it. Never write reasoning, deliberation, or commentary anywhere in the output.\n",
         ),
-        exclusive_line,
-        max_hits
+        exclusive_line, max_hits
     )
 }
 
@@ -621,9 +620,18 @@ mod tests {
             .to_string(),
         ]);
 
-        let out = triage(&doc, "what filler is here", None, 0, None, 64, 5, &llm::mock_config(&url))
-            .await
-            .unwrap();
+        let out = triage(
+            &doc,
+            "what filler is here",
+            None,
+            0,
+            None,
+            64,
+            5,
+            &llm::mock_config(&url),
+        )
+        .await
+        .unwrap();
 
         let expected = r#"Triage for 'what filler is here': 3 hit(s), scanned 3 chunk(s), bytes 0..150
    untriaged: bytes 60..135 (no JSON object found)
@@ -674,9 +682,18 @@ mod tests {
             .to_string(),
         ]);
 
-        let out = triage(&doc, "filler", None, 0, None, 64, 2, &llm::mock_config(&url))
-            .await
-            .unwrap();
+        let out = triage(
+            &doc,
+            "filler",
+            None,
+            0,
+            None,
+            64,
+            2,
+            &llm::mock_config(&url),
+        )
+        .await
+        .unwrap();
 
         assert!(out.contains("2 hit(s)"), "unexpected: {out}");
         // Ties keep doc order: chunk 0's 9 ranks before chunk 2's 9.
@@ -686,7 +703,10 @@ mod tests {
             !out.contains("first chunk region"),
             "7-score hit must be cut at max_hits 2: {out}"
         );
-        assert!(out.contains("untriaged: bytes 60..135"), "unexpected: {out}");
+        assert!(
+            out.contains("untriaged: bytes 60..135"),
+            "unexpected: {out}"
+        );
     }
 
     #[test]

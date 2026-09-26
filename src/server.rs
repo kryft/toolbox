@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_summarize_doc_not_implemented() {
+    async fn tools_call_summarize_doc_unknown_id() {
         let req = make_request(
             Value::from(7),
             "tools/call",
@@ -191,7 +191,7 @@ mod tests {
             resp.result["content"][0]["text"]
                 .as_str()
                 .unwrap()
-                .contains("not implemented")
+                .contains("invalid document id")
         );
     }
 }
