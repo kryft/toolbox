@@ -438,10 +438,43 @@ Contract (settled):
   now takes the first complete object (string/escape-aware depth scan),
   and the S-block/reduce only ever see the parsed `summary` field — no
   downstream contamination. The cost is wasted decode tokens, bounded
-  by the 4× cap. Same family as the triage guardrail finding, but the
-  map prompt already carries the strong "exactly one JSON object" line
-  and the model does it anyway — a duplicate guardrail line is not
-  assumed to suppress it (uninvestigated).
+  by the 4× cap. Same family as the triage guardrail finding. GUARDRAIL
+  A/B DONE (2026-09-27; the old "exactly one JSON object" line was the
+  arm that lost): the fail dumps carry the exact live calls (system
+  prompt, user prompt incl. the S-block), so the A/B replayed them via
+  bare curl (driver `experiments/guardrail_ab.py`, artifacts
+  /tmp/guard_ab_*.txt) — two conditions, the dense NT chunk
+  3441088..3703302 and the 1 Kings–1 Chronicles chunk 1376368..1638594,
+  both with the essay-framed god query at temp 0.2 (the live config):
+  the NT chunk was live-hostile in the current session (baseline
+  3/4 runs with a 1.2–1.4 KB essay preamble — the essay was REPEATED
+  inside the summary field, ~800 completion tokens — and 1/4 pure
+  prose, the fatal class); the 1 Kings chunk emitted only an 8-byte
+  markdown fence (harmless: `extract_json` strips it). Arms: A =
+  baseline; B = SHAPE ANCHOR (closing line replaced with "The first
+  character of your response must be { and the last character must be
+  }. The response is the JSON object itself: no text before it, no
+  text after it, no reasoning or commentary anywhere."); C = name-
+  the-failure ("if you find yourself writing a paragraph about the
+  chunk or the query, that paragraph is the summary and it belongs
+  inside the JSON object's summary field — the response itself is
+  never prose"). Result: B ADOPTED — 7/8 clean (0-byte preamble; one
+  8-byte fence, the accepted residual), 0/8 prose-only, and it
+  suppressed the fence on the 1 Kings chunk (A: 4/4 fenced); completion
+  tokens fell 780–891 → 395–482 (the preamble had been the essay
+  written twice). C fixed the essay 3/4 but left a 1098-byte preamble
+  on 1/4 and did nothing about the fence. Mechanism: B constrains
+  token 0, where both failure modes start — the post-hoc "no text
+  before or after" wording evidently does not reach the decision to
+  start writing. The map prompt alone carries the anchor: the story
+  and map-editor prompts keep the old line (their prose modes are
+  salvage / low-stakes; out of scope for this A/B). Note: the temp-0
+  deterministic preamble attractor (jesus_chunk15 probe) did not
+  reproduce in the current session — the identical user prompt now
+  tokenizes +16 prompt tokens (cause unknown; the old probe session
+  did not record its system prompt) and the mode sat at 0/1, consistent
+  with the knife-edge / session-dependent findings; the A/B therefore
+  ran on the live temp-0.2 conditions, where the mode was live.
 * Map-editor selection under the no-query runs (2026-09-26, noquery4 +
   noquery5 + replay A/B on the captured reduce input — the
   success/failure dumps made this a ~30-s loop instead of 11-min runs):
@@ -479,6 +512,26 @@ Contract (settled):
   16,384 (2026-09-26, ~1.5× that observation; Qwen 3.8 27B "can think
   quite a lot") — a truncation now costs one failed attempt only beyond
   that.
+* Essay-framed query × dense chunk (2026-09-26 battery, the god query
+  v1): "what this document reveals about the character and attributes
+  of God" FAILED a full run at chunk 3441088..3703302 (Matthew 8–Luke
+  11, the densest narrative) — all 3 attempts PURE PROSE (1073–1533
+  bytes, zero braces), a STABLE attractor (the model writes a long
+  "Regarding God's character and attributes, the text reveals..." essay
+  and never emits the object); the same chunk gave a healthy 451-token
+  JSON for the jesus query and no-query, so it was a query×chunk
+  interaction. Reworded to the short thematic "the character of God" →
+  the run succeeded. Two more data points from that run: chunks
+  1147022..1409188 and 688210..950416 were prose-only on 1–2 attempts
+  and recovered on retry — without the retry the run would have failed.
+  LESSON (now steered in the tool DESCRIPTION): keep summarize_doc
+  queries short and thematic, not "what does this doc say about X"
+  essay frames. CLOSED (2026-09-27, god_essay2 run): the ORIGINAL
+  failing phrasing, under the full defense stack (shape anchor + retry
+  + salvage + split editors + 16,384 headroom), completed cleanly —
+  645 s, 20/20 map chunks parsed on attempt 1, zero prose-only anywhere
+  in the run, story 287 words. The essay-framed failure class is closed
+  by the defense stack, not only by rewording.
 
 ## Long-running behavior
 
@@ -498,3 +551,221 @@ Contract (settled):
   per chunk → the mock must loop `listener.incoming()` and serve one
   canned body per connection. `start_mock_llm` / `mock_config` are
   `#[cfg(test)] pub(crate)` in `llm.rs`.
+* Known flake: `man_page::tests::lookup_times_out` (1 ms-timeout race
+  under full-suite parallel load; passes standalone and on re-run;
+  pre-existing, unrelated to the LLM tiers).
+* 1 pre-existing warning: `constant INTERNAL_ERROR is never used`
+  (`src/mcp.rs`).
+
+## Engine & endpoint (live facts)
+
+Moved here from CURRENT.md at the 2026-09-27 rotation (summarize_doc
+complete); live facts about the local LLM endpoint — refresh when the
+quant/engine changes.
+
+* `http://172.17.0.1:8081/v1` — currently **ninfer**, model
+  `qwen3.8-27b` (NVFP4 weights, **NVFP4 KV cache** as of 2026-09-10;
+  previously FP8 KV), max_model_len 262,000. The user swaps
+  quantizations in place: the served model id stays `qwen3.8-27b`, so a
+  quant swap needs no `LLAMA_MODEL` change (check `/v1/models` only to
+  know which quant is live); a changed id 404s the live integration
+  test `tools_call_triage_doc_success`. Old engine (available):
+  llama.cpp, `qwen3.8-27b-q4xl` (GGUF Q4_K_M, ctx 200,192), same URL.
+  (Last config check: 2026-09-26 post-reboot, 262k window confirmed via
+  /v1/models.)
+* Measured rates (thinking off, temp 0; the chunk-10 v2 payload =
+  108,174 prompt tokens; artifacts in `experiments/probe_nvfp4/`,
+  `experiments/probe_groupwise-int/`, `experiments/probe_nvfp4_kvfp4/`):
+  * NVFP4 + FP8 KV (2026-09-07): decode ~175 tok/s (MTP speculative
+    decoding, ~91% acceptance); cold prefill ~3,850 tok/s (two cold
+    runs, 27.9/28.2 s, `cached_tokens: 0` verified by mutating the
+    first system-prompt token); warm prefill (identical repeat) 0.1 s.
+  * NVFP4 + NVFP4 KV (2026-09-10, live): decode ~173 tok/s; cold
+    prefill ~3,640 tok/s (two cold runs, 29.8/29.7 s — ~6% slower than
+    the FP8-KV pair, not distinguishable from session variance without
+    interleaved A/B); warm prefill 0.1 s (APC on). Chunk-10 v2 quality:
+    healthy (90 regions, parse OK, finish=stop, 12 context leaks) — no
+    sign of KV-quantization oddness. Vs the FP8-KV v2 (93 regions): 80
+    spans identical; the drops/new are mostly re-segmentations of the
+    same underlying regions; 25 of the 80 common regions at −1 score
+    tier (none at −2 or worse) — inside the ±1–2 tier margin-of-error
+    band.
+  * groupwise-int (2026-09-07): decode ~163 tok/s; cold prefill
+    ~2,090 tok/s (51.7 s, `cached_tokens: 0`).
+  * KJV 20-chunk runtime (triage ~2.6k / summarize map ~2k completion
+    tokens per chunk): NVFP4+NVFP4KV ~14–16 min (v7 re-run observed
+    14 m 47 s; summarize runs observed 582–703 s including the
+    thinking map-editor call). Prefill dominates the call and is
+    per-chunk: APC gives no meaningful speedup on multi-chunk re-runs
+    (each chunk body is a unique ~108k prefix — see the APC bullet).
+* APC (prefix caching): ON for both NVFP4 sessions — identical payload
+  repeats read `prompt_tokens_details.cached_tokens: 108167` (0.1 s
+  warm prefill) on 2026-09-07 (FP8 KV) and 2026-09-10 (NVFP4 KV).
+  NOT observed for the groupwise-int session: the identical v2 payload
+  ~90 s after the full v2 run read `cached_tokens: 0`; the two restarts
+  used identical startup flags, so "APC disabled on that restart" is
+  largely ruled out — leading hypothesis is eviction (~229k fresh
+  tokens processed on that server in the meantime); open; verify with
+  an immediate identical-payload repeat if groupwise-int is ever run
+  again (low priority — see the engine-choice note). Scope (corrected
+  2026-09-10 after the v7/v7r re-runs): APC caches shared prefixes;
+  across a multi-chunk triage/summarize run the only shared prefix is
+  the system+query (~200–400 tokens) — each ~108k chunk body is unique,
+  so every chunk pays full prefill and APC gives no meaningful speedup
+  on multi-chunk re-runs (the identical v7→v7r re-run took 14 m 47 s,
+  cold-equivalent, not decode-only). The 0.1 s warm hit applies only to
+  re-running the exact same single payload (identical chunk body).
+  Prompt A/B runs always pay full prefill (a system-prompt mutation
+  invalidates the whole prefix).
+* Engine choice (2026-09-10, settled): NVFP4 + NVFP4 KV (live) — it has
+  the NVFP4 speed AND a 262k window, so it dominates groupwise-int
+  (190k window + ~1.85× slower prefill; the APC miss now looks like a
+  groupwise-int engine-state quirk). Margins at 262k: worst map call
+  ≈140k → ~47%; triage worst ≈172k (108k prompt + 64k max_tokens at
+  max_hits 1000) → ~35%; dense-text ≈177k → ~32%; summarize reduce
+  calls trivial.
+* Token counts are quant-invariant: the identical chunk-10 payload
+  tokenizes to the identical count on all three engines (108,137/108,174
+  on NVFP4, groupwise-int, and llama.cpp Q4_K_M) — ~2.9 bytes/token for
+  KJV text is the model's real rate, not an engine artifact. The
+  prompt-side budget math is in the summarize_doc context-fit bullet.
+* `reasoning_effort` is honored (2026-09-26 probe): a
+  `reasoning_effort: "low"` call returns `reasoning_content` +
+  `usage.completion_tokens_details.reasoning_tokens`, and thinking
+  tokens count against `max_tokens` (a 600 cap = 479 thinking + ~47
+  content tokens). This is what the summarize map editor's thinking
+  call relies on; any future thinking work inherits the same bound.
+* Engine behavior: serial (one request running at a time); queue
+  timeout 30 s → clean HTTP 503 for any waiting request.
+* One-server topology (user-confirmed): the agent harness and the
+  toolbox's triage/summarize calls all hit this one model. Consequences:
+  (1) from inside the agent session, launch long LLM jobs as ONE
+  BLOCKING bash call — never `nohup &` (while blocked, the harness sends
+  no chat requests, so the engine is exclusive to the job; `nohup &`
+  makes the harness a competing client → 30-s-timeout 503s in both
+  directions). The user's own terminal is cleanest of all. (2) The
+  assistant's quality judgments on tool output are ASYMMETRIC
+  self-evaluation: the harness runs the same weights at temp 1.0 with
+  thinking (far larger reasoning budget → good at catching local
+  errors: junk, missing landmarks, corruption), but shared weights =
+  shared priors → systematic family biases (score-calibration style)
+  stay invisible and are the user's judgment; the judge is
+  nondeterministic while the examined output is deterministic. (3) The
+  tools' temp 0 / thinking-off config is right for tools:
+  reproducibility + predictable latency/context (xhigh thinking on a
+  102k-token chunk would break both and would invalidate the
+  prompt-experiment corpus).
+
+## triage_doc — shipped state
+
+Validation history (moved here from CURRENT.md at the 2026-09-27
+rotation; the prompt contract is in the triage_doc section above, the
+incident evidence in Findings).
+
+* Shipped: prompt v5d + guardrail. v6 full KJV run: 15 m 03 s, 1000
+  hits (capped), 0 untriaged (20 chunks); the formerly degenerate span
+  2293947..2556131 yielded 86 hits. Score calibration accepted under
+  the stability rule (v6 {10:94, 9:300, 8:560, 7:46} vs v5 {10:15,
+  9:279, 8:577, 7:129} — ~100 regions up 2–3 tiers; nothing in the
+  investigate/concerning band).
+* Guardrail re-probed 2026-09-07 on the quant-swap probe pair:
+  groupwise-int healthy on both variants (v0 no longer reproduces the
+  NVFP4 degenerate truncator; ladder intact, shifted up one tier at the
+  7→8 boundary — within margin of error); current NVFP4 restart: v0
+  picked up the fenced attractor this session (session-dependent,
+  `extract_json` strips fences; the old 2,624-token truncation did not
+  recur) — v2 guardrail output healthy and unfenced.
+* v6 workload re-run on NVFP4+NVFP4KV (2026-09-10, the definitive
+  config check): v7 (cold) and v7r (identical re-run, 14 m 47 s) both
+  1000 hits (capped), 0 untriaged, 20 chunks. Ladder v7 {10:76, 9:301,
+  8:524, 7:99} vs v6 — a config-level shift (10-band −20%, 7-band +53),
+  within the stability rule's 1–2-tier distribution-shift band; the
+  10-band compression is the user's calibration call (2026-09-10
+  demotion analysis: the demoted/dropped 10s skew to background
+  narrative mentions — saddling an ass, dogs licking blood — while all
+  12 promotions went to genuinely central passages (four horsemen, the
+  Lamb, the seven-headed beast); the 10-band got cleaner. One soft
+  spot: Behemoth/Leviathan (Job 40–41, the two most substantial animal
+  treatments) dropped 10→9 — one tier, within band. User: analysis
+  closed for now.)
+* Run-to-run (v7 vs v7r, both temp 0 / thinking off): 956/1000
+  identical spans, score drift only ±1 (−1: 24, +1: 1), 11
+  note-prose-only flips; the 88 differing spans concentrate in chunk 0
+  (the densest competing-candidate region). So this config is NOT
+  bit-reproducible across identical temp-0 runs — the prior
+  bit-reproducibility finding (Findings) held for llama.cpp Q4_K_M and
+  the FP8-KV ninfer sessions; cause here is confounded between
+  KV-quant numerics and differing APC cache state between the two runs
+  (isolate with a third back-to-back run, offered).
+* Artifacts: `kjv_animals_triage{,_v2,_v3,_v4,_v5,_v6,_v7,_v7r}.txt`
+  at workspace root (v6 = the calibration baseline; v7/v7r = the config
+  check). Raw run JSONs were in /tmp (reboot-wipeable).
+
+## Experimental tooling (prompt A/B loop)
+
+Moved here from CURRENT.md at the 2026-09-27 rotation.
+
+* Fast-loop principle: a ~55–120 s curl of an exact chunk prompt ≈ 20×
+  the speed of a full 15-min run; use it to vet prompt/quant changes
+  before a full run.
+* `experiments/`: `battery.py` (chunk-10 variant battery), `controls.py`
+  (chunk-0 pair + repeats), `probe.py <model> [--url] [--out]` (re-runs
+  the exact chunk-10 v0/v2 payloads against any engine — used for the
+  Q4_K_M probe), `guardrail_ab.py <cond> <arm> [reps]` (replays a
+  captured map-call fail dump — system + user prompt verbatim — through
+  prompt arms via bare curl, mirroring `llm::chat_request`; the
+  shape-anchor A/B driver; the template for new replay experiments),
+  `run_summarize.sh <out_name> [query]` (the summarize bench: 3-line
+  JSON-RPC framing (initialize / notifications/initialized /
+  tools/call summarize_doc with `{id, query?}`) → `./target/debug/toolbox`
+  under `timeout 2400`; writes the raw response to
+  /tmp/kjv_summary_<out>.json and the tool text to workspace-root
+  `kjv_summary_<out>.txt`; prints exit/elapsed/isError). Artifacts:
+  `chunk10_exact.json` (byte-exact full-run prompt payload),
+  `chunk10_degenerate.json` (the 2,624-token signature),
+  `chunk10_healthy_105.json`, `kjv_id.txt`, `battery/` (results +
+  per-run payloads/responses), `probe_q4xl_r{1,2}/`,
+  `probe_nvfp4{,_kvfp4}/`, `probe_groupwise-int/`.
+* Replay-without-live-run (the dump-capture loop, 2026-09-26): the
+  success/failure dumps carry the full system + user prompt of a call —
+  `/tmp/summarize_dump_*.txt` (story / map-editor success) and
+  `/tmp/summarize_fail_*.txt` (every failed attempt, incl. the S-block
+  for map calls) — so any prompt can be A/B'd by replaying the captured
+  exchange through a bare curl (~10–40 s/arm) without a live run.
+  /tmp is reboot-wipeable; the in-repo driver (guardrail_ab.py) is the
+  template, and the same pattern works for triage (capture the triage
+  system + user prompt, replay through curl).
+* KJV doc: `data/<id>` (id in `experiments/kjv_id.txt`; 4,455,950
+  bytes; CRLF + multi-byte UTF-8 — 4,451,854 chars). Run artifacts at
+  workspace root: `kjv_summary_{noquery,jesus,god,god_essay,noquery2,
+  noquery3,noquery4,noquery5,jesus2,god_essay2}.txt` (pre-split
+  battery: noquery/jesus/god/god_essay; split era: noquery4 = the
+  fallback-carried run, noquery5 = first thinking-on map editor
+  (100%-span map), jesus2 = the query-run validation (map concentrates
+  on the query's arc), god_essay2 = the original run-killer phrasing
+  under the full defense stack — clean) and
+  `kjv_animals_triage{,_v2.._v7r}.txt` (triage).
+* Chunker rebuild recipe (for the Python replay tools — mirror
+  `chunk.rs` in BYTE space, not char space: the KJV file is CRLF and
+  multi-byte UTF-8, so a char-space line table drifts): line table =
+  [0] + the byte after every 0x0a (+ the total); `snap_forward(x)` =
+  first entry ≥ x, `snap_back(x)` = last entry ≤ x; CH=262144,
+  overlap=CH/8; NO trailing empty numbered line (`split_inclusive`
+  emits none — a Python `re.split` phantom line was the 5-token
+  perturbation that flipped the degenerate output to a healthy one).
+  Chunk 10 params: s=2293947, e=2556131, exclusive=2326744,
+  context_lines=1012, n_lines=7001, width=4.
+* Triage bench script: `/tmp/run_triage_bench.sh` (identical v3–v6
+  triage workload: full doc, query "all mentions of animals",
+  max_hits 1000) — /tmp is reboot-wipeable; same invocation pattern as
+  run_summarize.sh.
+
+## Deferred / open
+
+* Store-and-preview for oversized triage output (fetch_url pattern).
+* Context-window-relative `max_words` ceiling (4000 clamp kept for v1).
+* No tail overlap in the chunker (trigger: hits systematically missed
+  at boundaries).
+* Streaming reads for multi-GB docs (roadmap 6).
+* If the old engine (Q4_K_M) is used again: reconsider the guardrail
+  line for it (it collapses that quant's score ladder to all-10s).

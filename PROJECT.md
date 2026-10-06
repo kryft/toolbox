@@ -2,12 +2,12 @@
 
 Read this file first. Companion docs:
 
-* `CURRENT.md` — current-task state: the in-progress work, live endpoint
-  facts, test state, next step. Read before starting work; update at
-  step boundaries.
+* `CURRENT.md` — current-task state: the in-progress work, test state,
+  next step. Read before starting work; update at step boundaries.
 * `DESIGN.md` — design rationale, settled decisions, findings, known
-  limitations. Consult when the *why* matters; the code is the source of
-  truth for *how*.
+  limitations, and the persistent live facts (engine/endpoint, shipped
+  tool state, experimental tooling). Consult when the *why* matters;
+  the code is the source of truth for *how*.
 * `BEHAVIOR.md` — intended behavior of the man-page tool.
 
 ## Goal
@@ -51,12 +51,11 @@ Assume the user is an experienced programmer who is new to Rust.
        sha256-of-URL id); inline below a size threshold, id + preview above.~~
    5b. ~~Tier 2: `read_doc` (offset/limit) and in-document grep, so stored
        documents can be narrowed without loading them.~~
-   5c. Tier 3: LLM document analysis — `triage_doc` (ranked hits:
+   5c. ~~Tier 3: LLM document analysis — `triage_doc` (ranked hits:
        pointers + relevance + verbatim snippets) and `summarize_doc`
        (coherent story + structural map) via one-shot calls to the local
-       LLM endpoint. **`triage_doc` done; `summarize_doc` code-complete
-       after step 3; step 4 (docs + 20-chunk KJV run) next — see
-       CURRENT.md.**
+       LLM endpoint. Done 2026-09-27; A/B-validated on the 4.4 MB KJV
+       doc (contracts + findings in DESIGN.md).~~
 6. Concurrency/resource control as needed (batch fetching, politeness,
    long-running jobs).
 7. Plan the Rust agent separately, informed by the tier-3 agent loop.
@@ -77,20 +76,24 @@ implementing them.
 * `store.rs` — on-disk document store (sha256 id, raw file + JSON sidecar)
 * `read_doc.rs` — offset/limit reads of stored documents
 * `search_doc.rs` — substring search within stored documents
-* `llm.rs` — local LLM client (env config, one-shot `chat`,
-  `extract_json`, `#[cfg(test)]` mock helpers)
+* `llm.rs` — local LLM client (env config, one-shot `chat` /
+  `chat_reasoning` (per-call thinking override), `extract_json`,
+  `#[cfg(test)]` mock helpers)
 * `chunk.rs` — line-aligned overlapping chunks with exclusive zones
 * `triage_doc.rs` — tier-3 LLM triage (done; prompt v5d + guardrail)
-* `summarize_doc.rs` — tier-3 LLM summary (steps 1–3 done; step 4: docs + KJV run)
+* `summarize_doc.rs` — tier-3 LLM summary (done; story + map editors,
+  shape-anchor guardrail)
 
 ## Current State (one paragraph — details in CURRENT.md)
 
-Tiers 0–2 and `triage_doc` are complete and validated on a 4.4 MB KJV
-document (v6 run: 1000 hits, 0 untriaged, ~15 min on the current
-engine). `summarize_doc` steps 1–3 (skeleton, map + reduce, N>1
-S-block threading) are done — the code is complete after step 3; step 4
-is docs + the 20-chunk KJV live run. Suite: 98
-unit + 13 integration, green.
+Tiers 0–3 are complete and validated on a 4.4 MB KJV document:
+`triage_doc` (v6 run: 1000 hits, 0 untriaged, ~15 min) and
+`summarize_doc` (8-run battery: no-query, thematic and essay-framed
+queries; story + map editors with a per-chunk quota, thinking-on map
+selection, mechanical fallback, and the shape-anchor guardrail —
+contracts, A/B evidence and findings in DESIGN.md). Next: roadmap 6
+(concurrency/resource control as needed), informed by the tier-3
+agent-loop findings. Suite: 116 unit + 13 integration, green.
 
 ## MCP protocol target
 

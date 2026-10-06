@@ -55,6 +55,9 @@ query. An LLM reads the doc chunk by chunk, so this is slow; use it to
 compress a large doc before or instead of scanning it — summarize, then
 run triage_doc with the summary as its `context`, or aim a scan window
 with the map's byte spans.
+A thematic focus works best (e.g. "the life of Jesus"); for
+enumerative "find all X" queries use triage_doc instead — the map is a
+short importance-ranked shortlist, not an inventory.
 Returns a summary (default at most 400 words; max_words, capped at
 4000) plus a map of the most important regions with byte spans, in
 document order (default: two entries per chunk, at least 10;
@@ -95,7 +98,12 @@ fn map_system_prompt(exclusive_line: Option<usize>, max_words: usize) -> String 
             "- a logical unit cut off at the end of the chunk continues in the next chunk; note in the summary that it continues\n",
             "- an editor assembles the final story and prunes; you see the past (the earlier summaries) but not the future, so include borderline material rather than guessing at global importance; keep terminology consistent with the earlier summaries\n",
             "- if the chunk contains no substantive content, respond with {{\"summary\": \"\", \"pointers\": []}}\n",
-            "Your output must be exactly one complete, syntactically valid JSON object with no text before or after it. Never write reasoning, deliberation, or commentary anywhere in the output.\n",
+            // Shape anchor at token 0 (2026-09-27 A/B, experiments/
+            // guardrail_ab.py): the post-hoc "no text before or after"
+            // line did not stop the essay preamble / pure-prose mode on
+            // the dense NT chunk (1.2–1.4 KB preamble 3/4 runs, prose-
+            // only 1/4); this one did (0 bytes 7/8; DESIGN.md Findings).
+            "The first character of your response must be {{ and the last character must be }}. The response is the JSON object itself: no text before it, no text after it, no reasoning or commentary anywhere.\n",
         ),
         max_words, overlap_note
     )
@@ -888,7 +896,10 @@ mod tests {
             "- a logical unit cut off at the end of the chunk continues in the next chunk; note in the summary that it continues\n",
             "- an editor assembles the final story and prunes; you see the past (the earlier summaries) but not the future, so include borderline material rather than guessing at global importance; keep terminology consistent with the earlier summaries\n",
             "- if the chunk contains no substantive content, respond with {\"summary\": \"\", \"pointers\": []}\n",
-            "Your output must be exactly one complete, syntactically valid JSON object with no text before or after it. Never write reasoning, deliberation, or commentary anywhere in the output.\n",
+            // The shape anchor (2026-09-27 A/B): token-0 constraint that
+            // stopped the essay preamble / fence where the old
+            // "exactly one JSON object" line did not (DESIGN.md Findings).
+            "The first character of your response must be { and the last character must be }. The response is the JSON object itself: no text before it, no text after it, no reasoning or commentary anywhere.\n",
         );
         assert_eq!(
             map_system_prompt(Some(1), 250),
@@ -1748,83 +1759,5 @@ MAP
             out.contains("SUMMARY\nOne usable part."),
             "unexpected: {out}"
         );
-    }
-
-    /// Manual live-endpoint probe (temporary, removed after use): one map
-    /// call on one KJV chunk, dumping the raw response + usage. Env knobs:
-    /// PROBE_TARGET (a byte in the chunk; default 917582 = the animal
-    /// chunk that truncated the first full run), PROBE_QUERY (default
-    /// "all mentions of animals"; set to empty string for a no-query
-    /// call), PROBE_CAP (default 900; the live 4× cap at p = 250 is
-    /// 1150). Output: /tmp/kjv_map_probe.txt (copy it between A/B arms).
-    #[tokio::test]
-    #[ignore]
-    async fn probe_raw_map_response() {
-        let id = "6b15b4d67f82a6450a8d56f3fd2db9580a4bbfdaacdd86125242982cdc349923";
-        let doc = std::fs::read_to_string(format!("data/{id}"))
-            .expect("KJV doc missing");
-        let chunks = chunk::split(&doc, 0, None, chunk::default_chunk_bytes(), 64);
-        let target: usize = std::env::var("PROBE_TARGET")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(917582);
-        // Unset -> the animal reference query; set to "" -> no query.
-        let query: Option<String> = match std::env::var("PROBE_QUERY") {
-            Ok(q) if q.is_empty() => None,
-            Ok(q) => Some(q),
-            Err(_) => Some(String::from("all mentions of animals")),
-        };
-        let cap: u32 = std::env::var("PROBE_CAP")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(900);
-        let c = chunks
-            .iter()
-            .find(|c| c.start <= target && target < c.end)
-            .unwrap_or_else(|| panic!("no chunk containing byte {target}"));
-        eprintln!(
-            "probe: query {query:?}, cap {cap}, chunk bytes {}..{} (context_lines {})",
-            c.start,
-            c.end,
-            c.context_lines
-        );
-        let (system, user) = map_call(query.as_deref(), c, 250, None);
-        // Raw call (mirrors `llm::chat` exactly: same body shape, temp,
-        // thinking off) so the response's `usage` block is visible —
-        // `llm::chat` discards it.
-        let cfg = llm::LlmConfig::default();
-        let body = serde_json::json!({
-            "model": cfg.model,
-            "messages": [
-                { "role": "system", "content": &system },
-                { "role": "user", "content": &user },
-            ],
-            "temperature": cfg.temperature,
-            "max_tokens": cap,
-            "chat_template_kwargs": { "enable_thinking": false },
-        });
-        let resp = reqwest::Client::new()
-            .post(format!("{}/chat/completions", cfg.base_url))
-            .json(&body)
-            .send()
-            .await
-            .expect("probe request failed");
-        let v: serde_json::Value = resp.json().await.expect("probe response not JSON");
-        let text = v["choices"][0]["message"]["content"]
-            .as_str()
-            .expect("no content")
-            .to_string();
-        let usage = &v["usage"];
-        std::fs::write(
-            "/tmp/kjv_map_probe.txt",
-            format!(
-                "=== user prompt ({} bytes) ===\n{user}\n=== usage ===\n{usage}\n=== raw response ({} bytes) ===\n{text}\n",
-                user.len(),
-                text.len()
-            ),
-        )
-        .unwrap();
-        eprintln!("usage: {usage}");
-        eprintln!("response: {} bytes, {} lines", text.len(), text.lines().count());
     }
 }
